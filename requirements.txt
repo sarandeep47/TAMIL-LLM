@@ -1,0 +1,8 @@
+# Core deep-learning framework (CPU-only build)
+torch==2.14.0
+
+# Testing
+pytest>=8.0
+
+# Optional: prettier output during long training runs
+tqdm>=4.66
