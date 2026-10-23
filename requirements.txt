@@ -1,8 +1,14 @@
 # Core deep-learning framework (CPU-only build)
 torch==2.14.0
 
+# HTTP client — used by chatbot.py and fact_extractor.py to talk to Ollama
+requests>=2.31
+
 # Testing
 pytest>=8.0
 
 # Optional: prettier output during long training runs
 tqdm>=4.66
+
+# Optional: semantic memory retrieval experiment (test_semantic_memory.py only)
+# sentence-transformers>=2.7

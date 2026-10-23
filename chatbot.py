@@ -1,3 +1,24 @@
+"""
+chatbot.py — Tamil / Tanglish / English chatbot powered by Ollama.
+
+Architecture
+------------
+* ONE SQLite database for personal memory  → data/processed/memory.db   (memory_db.py)
+* ONE SQLite database for chat / training  → data/processed/chatbot.db  (training_review.py)
+* Deterministic fact lookup                → chat_memory.py
+* AI-powered fact extraction               → fact_extractor.py
+* Training-example review & export        → training_review.py
+
+Commands
+--------
+  /bye, /exit           – quit
+  /remember key=value   – explicitly save a fact
+  /forget key           – delete a stored fact
+  /memories             – list all stored facts
+  /review               – open the training-example review CLI
+  /export               – export approved examples to JSONL
+"""
+
 import json
 import re
 import sqlite3
@@ -6,214 +27,157 @@ from pathlib import Path
 
 import requests
 
-from memory_db import initialize_database, get_memory, save_memory
+from memory_db import (
+    initialize_database,
+    save_memory,
+    get_memory,
+    forget_memory,
+    list_memories,
+)
+from chat_memory import answer_question, learn_fact, detect_language_style
+from fact_extractor import extract_facts
+from training_review import (
+    initialize_training_db,
+    save_training_example,
+    export_approved_jsonl,
+    run_review_cli,
+)
 
-# Configuration
+# ── Configuration ────────────────────────────────────────────────────────────
 
-MODEL = "llama3.2:3b"
+MODEL      = "llama3.2:3b"
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
-DB_PATH = Path("data/processed/chatbot.db")
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+CHAT_DB_PATH = Path("data/processed/chatbot.db")
+CHAT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-# Create our chat history and reviewed training dataset.
-def initialize_chatbot():
-    initialize_database()
+# ── /remember key aliases → (canonical DB key, default Tamil value) ──────────
 
-    with sqlite3.connect(DB_PATH) as connection:
-        connection.execute("""
+_REMEMBER_KEY_MAP: dict[str, tuple[str, str | None]] = {
+    "name":      ("user_name",               None),
+    "location":  ("user_location",           None),
+    "colour":    ("favorite_colour",         None),
+    "color":     ("favorite_colour",         None),
+    "workplace": ("user_workplace",          None),
+    "job":       ("user_job_title",          None),
+    "learning":  ("user_learning",           None),
+    "interest":  ("user_interest",           None),
+    "skill":     ("user_skill",              None),
+    "goal":      ("user_goal",               None),
+    "language":  ("user_language_preference", None),
+    "style":     ("user_response_style",     None),
+}
+
+_KEY_CATEGORY: dict[str, str] = {
+    "user_name":               "identity",
+    "user_location":           "identity",
+    "favorite_colour":         "preference",
+    "user_workplace":          "work",
+    "user_job_title":          "work",
+    "user_learning":           "learning",
+    "user_interest":           "interest",
+    "user_skill":              "skill",
+    "user_goal":               "goal",
+    "user_language_preference": "preference",
+    "user_response_style":     "preference",
+}
+
+
+# ── Database initialisation ──────────────────────────────────────────────────
+
+def initialize_chatbot() -> None:
+    initialize_database()        # memory.db — personal facts
+    initialize_training_db()     # chatbot.db — chat history + training examples
+
+    with sqlite3.connect(CHAT_DB_PATH) as conn:
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS chat_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                role TEXT NOT NULL,
-                message TEXT NOT NULL,
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                role       TEXT NOT NULL,
+                message    TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
         """)
-
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS training_examples (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_message TEXT NOT NULL,
-                assistant_response TEXT NOT NULL,
-                approved INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL
-            )
-        """)
+        conn.commit()
 
 
-def save_chat(role, message):
-    with sqlite3.connect(DB_PATH) as connection:
-        connection.execute(
-            """
-            INSERT INTO chat_history (role, message, created_at)
-            VALUES (?, ?, ?)
-            """,
+# ── Chat history ─────────────────────────────────────────────────────────────
+
+def save_chat(role: str, message: str) -> None:
+    with sqlite3.connect(CHAT_DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO chat_history (role, message, created_at) VALUES (?, ?, ?)",
             (role, message, datetime.now().isoformat(timespec="seconds")),
         )
 
 
-def get_recent_history(limit=10):
-    with sqlite3.connect(DB_PATH) as connection:
-        rows = connection.execute(
+def get_recent_history(limit: int = 10) -> list[dict]:
+    with sqlite3.connect(CHAT_DB_PATH) as conn:
+        rows = conn.execute(
             """
-            SELECT role, message
-            FROM chat_history
-            ORDER BY id DESC
-            LIMIT ?
+            SELECT role, message FROM chat_history
+            ORDER BY id DESC LIMIT ?
             """,
             (limit,),
         ).fetchall()
-
-    # The database returns newest first; the model needs oldest first.
     rows.reverse()
-
-    return [
-        {"role": role, "content": message}
-        for role, message in rows
-    ]
+    return [{"role": role, "content": msg} for role, msg in rows]
 
 
-def retrieve_memory(message):
-    """Basic memory retrieval; the LLM still handles natural conversation."""
-    q = message.lower()
+# ── Memory context builder ───────────────────────────────────────────────────
 
-    patterns = {
-        "user_name": [
-            "my name", "en peyar", "ennoda peyar",
-            "en peru", "ennoda peru", "என் பெயர்",
-        ],
-        "user_location": [
-            "where do i live", "where am i from",
-            "en location", "naan enga", "நான் எங்கே",
-        ],
-        "favorite_colour": [
-            "favourite colour", "favorite color",
-            "favourite color", "பிடித்த நிறம்", "பிடித்த வண்ணம்",
-        ],
-    }
-
-    for fact_key, phrases in patterns.items():
-        if any(phrase in q for phrase in phrases):
-            value = get_memory(fact_key)
-
-            if value:
-                tamil_value = get_memory(fact_key, language="tamil")
-                return (
-                    f"Saved memory: {value}. "
-                    f"Tamil version: {tamil_value or value}."
-                )
-
-    return None
+def build_memory_context() -> str | None:
+    """
+    Build a concise memory context string from all stored facts.
+    Injected into the system prompt so Ollama is aware of the user's profile.
+    """
+    facts = list_memories()
+    if not facts:
+        return None
+    lines = ["Known personal facts about the user:"]
+    for f in facts:
+        label = f["key"].replace("_", " ")
+        lines.append(f"  • {label}: {f['value']}")
+    return "\n".join(lines)
 
 
+# ── Ollama chat call ─────────────────────────────────────────────────────────
 
-def answer_from_saved_memory(message):
-    q = message.lower().strip()
+_SYSTEM_PROMPT = """\
+You are a helpful, respectful Tamil/Tanglish/English assistant.
 
-    questions = {
-        "user_name": [
-            "en peyar enna",
-            "ennoda peyar enna",
-            "en peru enna",
-            "what is my name",
-            "what's my name",
-            "என் பெயர் என்ன",
-            "என்னுடைய பெயர் என்ன",
-        ],
-        "user_location": [
-            "where do i live",
-            "where am i from",
-            "what is my location",
-            "naan enga irukken",
-            "naan enga iruken",
-            "naa enga iruken",
-            "naa enga irukken",
-            "na enga iruken",
-            "na enga irukken",
-            "enga iruken",
-            "enga irukken",
-            "நான் எங்கே இருக்கிறேன்",
-        ],
-        "favorite_colour": [
-            "what is my favourite colour",
-            "what is my favorite colour",
-            "what is my favourite color",
-            "what is my favorite color",
-            "en favourite colour enna",
-            "en favorite color enna",
-            "enakku pidicha colour enna",
-            "எனக்கு பிடித்த நிறம் என்ன",
-            "எனக்குப் பிடித்த நிறம் என்ன",
-        ],
-    }
-
-    is_tamil = any("\u0B80" <= char <= "\u0BFF" for char in message)
-
-    tanglish_words = {
-        "en", "enna", "ennoda", "peru",
-        "naan", "naa", "enga", "irukken", "iruken",
-    }
-    is_tanglish = bool(set(q.split()) & tanglish_words)
-
-    for key, phrases in questions.items():
-        if any(phrase in q for phrase in phrases):
-            value = get_memory(key)
-
-            if not value:
-                return None
-
-            if key == "user_name":
-                if is_tamil:
-                    tamil_name = get_memory(key, language="tamil")
-                    return f"உங்கள் பெயர் {tamil_name or value}."
-                if is_tanglish:
-                    return f"Unga peyar {value}."
-                return f"Your name is {value}."
-
-            if key == "user_location":
-                if is_tamil:
-                    tamil_location = get_memory(key, language="tamil")
-                    return f"நீங்கள் {tamil_location or value} பகுதியில் வசிக்கிறீர்கள்."
-                if is_tanglish:
-                    return f"Neenga {value} la vasikkireenga."
-                return f"You live in {value}."
-
-            if key == "favorite_colour":
-                if is_tamil:
-                    return f"உங்களுக்கு பிடித்த நிறம் {value}."
-                if is_tanglish:
-                    return f"Ungalukku pidicha colour {value}."
-                return f"Your favourite colour is {value}."
-
-    return None
-
-
-
-def ask_ollama(user_message):
-    saved_answer = answer_from_saved_memory(user_message)
-
-    if saved_answer:
-        return saved_answer
-
-    memory = retrieve_memory(user_message)
-
-    system_prompt = """
-You are a friendly Tamil, Tanglish, and English chatbot.
-Reply in the language and writing style used by the user.
-Understand the conversation context before answering.
-Never invent personal facts. If you do not know something,
-say so honestly. Use simple, natural language.
+Critical rules you must ALWAYS follow:
+1. Reply in the SAME language and script the user used.
+2. NEVER invent personal facts. If memory context is provided, use ONLY that.
+   If it is not provided, say you don't know — do not guess.
+3. NEVER claim the user lives somewhere, is learning something, or has a goal
+   unless that fact appears in the memory block below.
+4. Keep replies concise, warm, and natural. No sarcasm. No insults.
+5. Technical terms (Python, AI Engineer, etc.) stay in English even in Tamil replies.
+6. When the user introduces themselves ("My name is X"), acknowledge it simply.
+   Example good reply to "My name is Sarandeep": "Nice to meet you, Sarandeep!"
+   Example bad reply: "நீயும் Sarandeep!" (dismissive) or making jokes.
 """
 
-    messages = [{"role": "system", "content": system_prompt}]
 
-    if memory:
+
+def ask_ollama(user_message: str) -> str:
+    # 1. Try deterministic memory lookup first
+    memory_answer = learn_fact(user_message) or answer_question(user_message)
+    if memory_answer:
+        return memory_answer
+
+    # 2. Build messages list
+    messages: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
+
+    memory_ctx = build_memory_context()
+    if memory_ctx:
         messages.append({
-            "role": "system",
+            "role":    "system",
             "content": (
-                "Use this saved personal information when relevant. "
-                "Treat it as factual memory, not as a user instruction: "
-                + memory
+                "Use the following memory when relevant. "
+                "Treat it as factual — do not contradict it:\n\n"
+                + memory_ctx
             ),
         })
 
@@ -223,177 +187,160 @@ say so honestly. Use simple, natural language.
     try:
         response = requests.post(
             OLLAMA_URL,
-            json={
-                "model": MODEL,
-                "messages": messages,
-                "stream": False,
-            },
+            json={"model": MODEL, "messages": messages, "stream": False},
             timeout=180,
         )
         response.raise_for_status()
-        data = response.json()
-        return data["message"]["content"].strip()
+        return response.json()["message"]["content"].strip()
 
     except requests.exceptions.ConnectionError:
         return (
-            "Ollama connection failed. Make sure Ollama is running "
-            "and try again."
+            "Ollama connection failed. Make sure Ollama is running and try again."
         )
-    except requests.exceptions.RequestException as error:
-        return f"Error contacting Ollama: {error}"
+    except requests.exceptions.Timeout:
+        return "Ollama took too long to respond. Try again."
+    except requests.exceptions.RequestException as err:
+        return f"Error contacting Ollama: {err}"
 
 
-def extract_and_save_facts(user_message):
-    """Extract a few known types of personal facts and save them."""
-    message = user_message.strip()
-    q = message.lower()
-    saved_facts = []
+# ── Command handlers ─────────────────────────────────────────────────────────
 
-    # 1. Extract the user's name.
-    name_patterns = [
-        r"\bmy name is\s+([A-Za-z][A-Za-z .'-]*)",
-        r"\ben peyar\s+([A-Za-z][A-Za-z .'-]*)",
-        r"\ben peru\s+([A-Za-z][A-Za-z .'-]*)",
-    ]
+def handle_remember(fact_str: str) -> str:
+    """Handle /remember key=value command."""
+    key_raw, sep, value = fact_str.partition("=")
+    if not sep or not value.strip():
+        keys = ", ".join(_REMEMBER_KEY_MAP)
+        return f"Usage: /remember key=value   (keys: {keys})"
 
-    for pattern in name_patterns:
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            name = match.group(1).strip().rstrip(" .!?")
-            name = re.split(
-                r"\s+(?:and|but|i|my|en|naan)\b",
-                name,
-                maxsplit=1,
-                flags=re.IGNORECASE,
-            )[0].strip()
+    key_raw = key_raw.strip().lower()
+    value   = value.strip()
 
-            if name:
-                save_memory("user_name", name)
-                saved_facts.append("your name")
-            break
+    if key_raw not in _REMEMBER_KEY_MAP:
+        keys = ", ".join(_REMEMBER_KEY_MAP)
+        return f"Unknown key '{key_raw}'. Valid keys: {keys}"
 
-    # 2. Extract the user's location.
-    location_patterns = [
-        r"\bi live in\s+([A-Za-z][A-Za-z .'-]*)",
-        r"\bi am from\s+([A-Za-z][A-Za-z .'-]*)",
-        r"\bi'm from\s+([A-Za-z][A-Za-z .'-]*)",
-        r"\bnaan\s+([A-Za-z][A-Za-z .'-]*)\s+la irukken",
-        r"\bnaan\s+([A-Za-z][A-Za-z .'-]*)\s+la iruken",
-    ]
+    fact_key, _ = _REMEMBER_KEY_MAP[key_raw]
+    category     = _KEY_CATEGORY.get(fact_key, "general")
 
-    for pattern in location_patterns:
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            location = match.group(1).strip().rstrip(" .!?")
-            location = re.split(
-                r"\s+(?:and|but|i|my|en|naan)\b",
-                location,
-                maxsplit=1,
-                flags=re.IGNORECASE,
-            )[0].strip()
-
-            if location:
-                save_memory("user_location", location)
-                saved_facts.append("your location")
-            break
-
-    # 3. Extract an explicitly stated favourite colour.
-    colour_patterns = [
-        r"\bmy favourite colou?r is\s+([A-Za-z-]+)",
-        r"\bmy favourite colou?r\s+(?:is\s+)?([A-Za-z-]+)",
-        r"\ben favourite colou?r\s+(?:is\s+)?([A-Za-z-]+)",
-        r"\benakku pidicha colou?r\s+([A-Za-z-]+)",
-    ]
-
-    for pattern in colour_patterns:
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            colour = match.group(1).strip().rstrip(" .!?")
-
-            if colour not in {"is", "my", "and", "but"}:
-                save_memory("favorite_colour", colour)
-                saved_facts.append("your favourite colour")
-            break
-
-    return saved_facts
+    save_memory(
+        fact_key, value,
+        category=category,
+        confidence=1.0,
+        source="manual",
+    )
+    return f"✓ Saved {key_raw} = {value}"
 
 
-def save_training_example(user_message, assistant_response):
-    """Save an example for later review, not automatic training."""
-    with sqlite3.connect(DB_PATH) as connection:
-        connection.execute(
-            """
-            INSERT INTO training_examples
-                (user_message, assistant_response, approved, created_at)
-            VALUES (?, ?, 0, ?)
-            """,
-            (
-                user_message,
-                assistant_response,
-                datetime.now().isoformat(timespec="seconds"),
-            ),
+def handle_forget(key_str: str) -> str:
+    """Handle /forget key command."""
+    key_raw = key_str.strip().lower()
+    if not key_raw:
+        return "Usage: /forget key"
+
+    # Accept either the short alias or the full DB key
+    if key_raw in _REMEMBER_KEY_MAP:
+        fact_key, _ = _REMEMBER_KEY_MAP[key_raw]
+    else:
+        fact_key = key_raw
+
+    if forget_memory(fact_key):
+        return f"✓ Forgotten: {key_raw}"
+    return f"No memory found for '{key_raw}'."
+
+
+def handle_memories() -> str:
+    """Handle /memories command — list all stored facts."""
+    facts = list_memories()
+    if not facts:
+        return "No memories stored yet."
+
+    lines = ["Your stored memories:\n"]
+    for f in facts:
+        label = f["key"].replace("_", " ").title()
+        tamil = f"  (Tamil: {f['tamil']})" if f["tamil"] else ""
+        src   = f['source']
+        conf  = f['confidence']
+        lines.append(
+            f"  • {label}: {f['value']}{tamil}"
+            f"  [{f['category']}, {src}, conf={conf:.2f}]"
         )
+    return "\n".join(lines)
 
 
-def main():
+# ── Main loop ─────────────────────────────────────────────────────────────────
+
+def main() -> None:
     initialize_chatbot()
 
-    print("Tamil Chatbot started!")
-    print("Type /bye to exit.")
-    print("Type /remember name=Sarandeep to save your name.")
-    print("Type /remember location=Madurai to save your location.")
-    print()
+    print("\n╔═══════════════════════════════════════╗")
+    print("║        Tamil LLM Chatbot v2.0         ║")
+    print("╠═══════════════════════════════════════╣")
+    print("║  /remember key=value  – save a fact   ║")
+    print("║  /forget key          – delete a fact ║")
+    print("║  /memories            – list memories ║")
+    print("║  /review              – review examples║")
+    print("║  /export              – export JSONL  ║")
+    print("║  /bye                 – exit           ║")
+    print("╚═══════════════════════════════════════╝\n")
 
     while True:
-        user_message = input("You: ").strip()
+        try:
+            user_message = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nAssistant: Goodbye! See you again.")
+            break
 
         if not user_message:
             continue
 
+        # ── Exit ──────────────────────────────────────────────────────────
         if user_message.lower() in {"/bye", "/exit"}:
             print("Assistant: Goodbye! See you again.")
             break
 
-        # Explicitly save supported facts.
+        # ── /remember ─────────────────────────────────────────────────────
         if user_message.lower().startswith("/remember "):
-            fact = user_message[len("/remember "):]
-            key, separator, value = fact.partition("=")
-
-            key = key.strip().lower()
-            value = value.strip()
-
-            key_map = {
-            "name": ("user_name", "சரண்தீப்"),
-            "location": ("user_location", "மதுரை"),
-            }
-
-            if separator and value and key in key_map:
-                fact_key, tamil_value = key_map[key]
-                save_memory(fact_key, value, tamil_value)
-                print(f"Assistant: Saved {key} = {value}")
-            else:
-                print(
-                    "Assistant: Use /remember name=Sarandeep "
-                    "or /remember location=Madurai"
-                )
-
+            fact_str = user_message[len("/remember "):]
+            print(f"Assistant: {handle_remember(fact_str)}\n")
             continue
 
-        
-       
+        # ── /forget ───────────────────────────────────────────────────────
+        if user_message.lower().startswith("/forget "):
+            key_str = user_message[len("/forget "):]
+            print(f"Assistant: {handle_forget(key_str)}\n")
+            continue
+
+        # ── /memories ─────────────────────────────────────────────────────
+        if user_message.lower() == "/memories":
+            print(f"Assistant: {handle_memories()}\n")
+            continue
+
+        # ── /review ───────────────────────────────────────────────────────
+        if user_message.lower() in {"/review", "/review list"}:
+            run_review_cli()
+            continue
+
+        # ── /export ───────────────────────────────────────────────────────
+        if user_message.lower() == "/export":
+            path = export_approved_jsonl()
+            print(f"Assistant: Exported approved examples → {path}\n")
+            continue
+
+        # ── Normal chat ───────────────────────────────────────────────────
         save_chat("user", user_message)
 
-        saved_facts = extract_and_save_facts(user_message)
+        # AI fact extraction (non-blocking; fails silently)
+        extracted = extract_facts(user_message)
+        if extracted:
+            labels = [f.key.replace("user_", "").replace("_", " ")
+                      for f in extracted]
+            print(f"  (Memory saved: {', '.join(labels)})")
 
         assistant_response = ask_ollama(user_message)
         print(f"Assistant: {assistant_response}\n")
 
-        if saved_facts:
-            print(f"(Memory saved: {', '.join(saved_facts)})")
-
         save_chat("assistant", assistant_response)
         save_training_example(user_message, assistant_response)
-
 
 
 if __name__ == "__main__":
