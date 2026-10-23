@@ -497,6 +497,11 @@ def _validate(raw_facts: list[dict]) -> list[Fact]:
     return valid
 
 
+# Alias used by tests and external callers; _validate was the original
+# internal name before it was documented as part of the public helper API.
+_validate_raw_facts = _validate
+
+
 # ── Persistence ──────────────────────────────────────────────────────────────
 
 def _get_db_row(key: str) -> dict | None:
