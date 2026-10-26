@@ -2,13 +2,18 @@
 memory_db.py — Single source of truth for all persistent personal memory.
 
 Schema (memories table):
-    fact_key    TEXT UNIQUE   – canonical key, e.g. "user_name"
-    fact_value  TEXT          – primary (English / romanised) value
-    tamil_value TEXT          – Tamil-script equivalent (optional)
-    category    TEXT          – e.g. "identity", "interest"
-    confidence  REAL          – 0.0–1.0; manual = 1.0
-    source      TEXT          – "manual", "regex", or "ai"
-    updated_at  TEXT          – ISO-8601 timestamp of last update
+    fact_key         TEXT UNIQUE   – canonical key, e.g. "user_name"
+    fact_value       TEXT          – primary (English / romanised) value
+    tamil_value      TEXT          – Tamil-script equivalent (optional)
+    category         TEXT          – e.g. "identity", "interest"
+    confidence       REAL          – 0.0–1.0; manual = 1.0
+    source           TEXT          – "manual", "regex", or "ai"
+    updated_at       TEXT          – ISO-8601 timestamp of last update
+    education_status TEXT          – 'current' | 'past' | NULL
+                                     Only used for user_school rows.
+                                     'current'  → user said "padikuren" / "am studying"
+                                     'past'     → user said "padichen" / "studied at"
+                                     NULL        → unknown / not specified
 
 Migration: every initialize_database() call is safe to run on an existing DB;
 missing columns are added and known category mismatches are corrected.
@@ -42,19 +47,21 @@ _CANONICAL_CATEGORIES: dict[str, str] = {
 
 # Columns that must exist — used for safe migration
 _REQUIRED_COLUMNS: dict[str, str] = {
-    "tamil_value": "TEXT",
-    "category":    "TEXT DEFAULT 'general'",
-    "confidence":  "REAL DEFAULT 1.0",
-    "source":      "TEXT DEFAULT 'manual'",
-    "updated_at":  "TEXT",
+    "tamil_value":      "TEXT",
+    "category":         "TEXT DEFAULT 'general'",
+    "confidence":       "REAL DEFAULT 1.0",
+    "source":           "TEXT DEFAULT 'manual'",
+    "updated_at":       "TEXT",
+    "education_status": "TEXT",
 }
 
 _COLUMN_DEFAULTS: dict[str, str] = {
-    "tamil_value": "NULL",
-    "category":    "'general'",
-    "confidence":  "1.0",
-    "source":      "'manual'",
-    "updated_at":  "NULL",
+    "tamil_value":      "NULL",
+    "category":         "'general'",
+    "confidence":       "1.0",
+    "source":           "'manual'",
+    "updated_at":       "NULL",
+    "education_status": "NULL",
 }
 
 
@@ -110,6 +117,7 @@ def save_memory(
     category: str = "general",
     confidence: float = 1.0,
     source: str = "manual",
+    education_status: str | None = None,
 ) -> None:
     """
     Upsert a personal fact.
@@ -141,15 +149,16 @@ def save_memory(
             """
             INSERT INTO memories
                 (fact_key, fact_value, tamil_value, category, confidence,
-                 source, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 source, updated_at, education_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(fact_key) DO UPDATE SET
-                fact_value  = excluded.fact_value,
-                tamil_value = COALESCE(excluded.tamil_value, tamil_value),
-                category    = excluded.category,
-                confidence  = excluded.confidence,
-                source      = excluded.source,
-                updated_at  = excluded.updated_at
+                fact_value       = excluded.fact_value,
+                tamil_value      = COALESCE(excluded.tamil_value, tamil_value),
+                category         = excluded.category,
+                confidence       = excluded.confidence,
+                source           = excluded.source,
+                updated_at       = excluded.updated_at,
+                education_status = COALESCE(excluded.education_status, education_status)
             """,
             (
                 fact_key,
@@ -159,6 +168,7 @@ def save_memory(
                 confidence,
                 source,
                 datetime.now().isoformat(timespec="seconds"),
+                education_status,
             ),
         )
 
@@ -185,6 +195,21 @@ def get_memory(fact_key: str, language: str = "english") -> str | None:
     return fact_value
 
 
+def get_education_status(fact_key: str = "user_school") -> str | None:
+    """
+    Return the education_status for user_school: 'current', 'past', or None.
+    None means the status was not recorded (e.g. saved via /remember).
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT education_status FROM memories WHERE fact_key = ?",
+            (fact_key,),
+        ).fetchone()
+    if row is None:
+        return None
+    return row[0]  # may be None if column is NULL
+
+
 def forget_memory(fact_key: str) -> bool:
     """Delete a stored fact. Returns True if a row was deleted."""
     with sqlite3.connect(DB_PATH) as conn:
@@ -200,20 +225,21 @@ def list_memories() -> list[dict]:
         rows = conn.execute(
             """
             SELECT fact_key, fact_value, tamil_value, category,
-                   confidence, source, updated_at
+                   confidence, source, updated_at, education_status
             FROM memories
             ORDER BY category, fact_key
             """
         ).fetchall()
     return [
         {
-            "key":        row[0],
-            "value":      row[1],
-            "tamil":      row[2],
-            "category":   row[3],
-            "confidence": row[4],
-            "source":     row[5],
-            "updated_at": row[6],
+            "key":              row[0],
+            "value":            row[1],
+            "tamil":            row[2],
+            "category":         row[3],
+            "confidence":       row[4],
+            "source":           row[5],
+            "updated_at":       row[6],
+            "education_status": row[7],
         }
         for row in rows
     ]

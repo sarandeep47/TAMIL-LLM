@@ -55,6 +55,10 @@ KNOWN_KEYS: dict[str, str] = {
     "user_workplace":           "work",
     "user_job_title":           "work",
     "user_school":              "education",
+    # Pseudo-keys used internally during regex extraction only;
+    # they are normalized to user_school before writing to the DB.
+    "user_school_past":         "education",   # padichen / studied at (past)
+    "user_school_current":      "education",   # padikuren / am studying (present)
     "user_field_of_study":      "education",
     "user_learning":            "learning",
     "user_interest":            "interest",
@@ -74,11 +78,12 @@ _BAD_VALUES = {
 
 @dataclass
 class Fact:
-    key:        str
-    value:      str
-    category:   str
-    confidence: float = 0.75
-    source:     str   = "ai"
+    key:              str
+    value:            str
+    category:         str
+    confidence:       float = 0.75
+    source:           str   = "ai"
+    education_status: str | None = None  # 'current' | 'past' | None
 
     def is_valid(self) -> bool:
         if not self.key or not self.value:
@@ -113,13 +118,18 @@ _TAMIL_STMT_SUBSTRS: list[str] = [
     "ஆக வேண்டும்",          # aaka vendum — "want to become"
     "கற்றுக்கொண்டு இருக்",  # katrukkandu irukk — "am learning"
     "கற்கிறேன்",             # kathukiren — "I learn"
-    "படிக்கிறேன்",           # padikkiren — "I study"
+    "படிக்கிறேன்",           # padikkiren — "I study" (present)
+    "படித்தேன்",             # padittaen — "I studied" (past)
     "வேலை செய்கிறேன்",      # work doing
     "நிறுவனத்தில் வேலை",   # at company, work
     "நான் வசிக்கிறேன்",
     "எனக்கு பிடிக்கும்",
     "எனக்குப் பிடிக்கும்",
     "என் திறமை",
+    # School statements (Tamil)
+    "கல்லூரியில் படிக்கிறேன்",  # currently studying at college
+    "கல்லூரியில் படித்தேன்",    # studied at college (past)
+    "பள்ளியில் படித்தேன்",      # studied at school (past)
 ]
 
 # Substrings that indicate a Tamil-script QUESTION — exact match needed
@@ -157,6 +167,17 @@ _STMT_PATTERNS: list[re.Pattern] = [
         r"\bi live in\b",
         r"\bi('m| am) (from|based in)\b",
         r"\bi prefer\b",
+        # School — past tense (padichen / studied at)
+        r"\b(?:naa|naan)\s+[A-Za-z].{1,60}?\s+(?:la|il|le)\s+padichen\b",
+        r"\b(?:naa|naan)\s+[A-Za-z].{1,60}?\s+padichen\b",
+        r"\bi studied at\b",
+        r"\bi went to (?:college|school|university)\b",
+        r"\bmy (?:college|school) is\b",
+        # School — present tense (padikuren / am studying at)
+        r"\b(?:naa|naan)\s+[A-Za-z].{1,60}?\s+(?:la|il|le)\s+padikuren\b",
+        r"\b(?:naa|naan)\s+[A-Za-z].{1,60}?\s+padikuren\b",
+        r"\bi(?:'m| am) studying at\b",
+        r"\bi study at\b",
     ]
 ]
 
@@ -231,7 +252,15 @@ _TAMIL_REGEXES: list[tuple[str, re.Pattern]] = [
     # Captures the subject (may be ASCII like "Python")
     ("user_learning", re.compile(
         r"(?:நான்\s+)?([A-Za-z][\w+#.-]{0,30}|[\u0B80-\u0BFF]+)\s+"
-        r"(?:கற்றுக்கொண்டு இருக்கிறேன்|கற்கிறேன்|படிக்கிறேன்)"
+        r"(?:கற்றுக்கொண்டு இருக்கிறேன்|கற்கிறேன்)"
+    )),
+    # School (Tamil present): "நான் X கல்லூரியில் படிக்கிறேன்"
+    ("user_school_current", re.compile(
+        r"நான்\s+([A-Za-z][\w\s.,\-]{1,60}?)\s+(?:கல்லூரியில்|பள்ளியில்)\s+படிக்கிறேன்"
+    )),
+    # School (Tamil past): "நான் X கல்லூரியில் படித்தேன்"
+    ("user_school_past", re.compile(
+        r"நான்\s+([A-Za-z][\w\s.,\-]{1,60}?)\s+(?:கல்லூரியில்|பள்ளியில்)\s+படித்தேன்"
     )),
     # Workplace: "நான் X நிறுவனத்தில் வேலை செய்கிறேன்" / "நான் X-ல் வேலை செய்கிறேன்"
     ("user_workplace", re.compile(
@@ -261,7 +290,47 @@ _ASCII_REGEXES: list[tuple[str, re.Pattern]] = [
     ("user_goal", re.compile(
         r"en goal\s+([A-Z][A-Za-z]+(?:\s+[A-Za-z]+)*)",
     )),
-    # Learning (Tanglish verb forms)
+    # School — PAST tense (padichen = I studied)
+    # Must come BEFORE learning patterns to avoid mis-classifying school as learning
+    ("user_school_past", re.compile(
+        r"(?:naa|naan)\s+([A-Za-z][\w\s.,&\-]{1,60}?)\s+(?:la|il|le)\s+padichen\b",
+        re.IGNORECASE,
+    )),
+    ("user_school_past", re.compile(
+        r"(?:naa|naan)\s+([A-Za-z][\w\s.,&\-]{1,60}?)\s+padichen\b",
+        re.IGNORECASE,
+    )),
+    ("user_school_past", re.compile(
+        r"i\s+studied\s+at\s+([A-Za-z][\w\s.,&\-]{1,60}?)(?:[.!,]|$)",
+        re.IGNORECASE,
+    )),
+    ("user_school_past", re.compile(
+        r"i\s+went\s+to\s+(?:college|school|university)\s+(?:at\s+)?([A-Za-z][\w\s.,&\-]{1,60}?)(?:[.!,]|$)",
+        re.IGNORECASE,
+    )),
+    ("user_school_past", re.compile(
+        r"my\s+(?:college|school)\s+(?:is|was)\s+([A-Za-z][\w\s.,&\-]{1,60}?)(?:[.!,]|$)",
+        re.IGNORECASE,
+    )),
+    # School — PRESENT tense (padikuren = I am studying)
+    ("user_school_current", re.compile(
+        r"(?:naa|naan)\s+([A-Za-z][\w\s.,&\-]{1,60}?)\s+(?:la|il|le)\s+padikuren\b",
+        re.IGNORECASE,
+    )),
+    ("user_school_current", re.compile(
+        r"(?:naa|naan)\s+([A-Za-z][\w\s.,&\-]{1,60}?)\s+padikuren\b",
+        re.IGNORECASE,
+    )),
+    # "I'm studying at X" — must come BEFORE the bare "i'm studying X" learning pattern
+    ("user_school_current", re.compile(
+        r"i(?:'m| am)\s+studying\s+at\s+([A-Za-z][\w\s.,&\-]{1,60}?)(?:[.!,]|$)",
+        re.IGNORECASE,
+    )),
+    ("user_school_current", re.compile(
+        r"i\s+study\s+at\s+([A-Za-z][\w\s.,&\-]{1,60}?)(?:[.!,]|$)",
+        re.IGNORECASE,
+    )),
+    # Learning (Tanglish verb forms) — after school patterns
     ("user_learning", re.compile(
         r"naan\s+([A-Za-z][\w+#.-]{0,30})\s+(?:kathukittu|kathukkitu|kathukkiren|kathukiren|padikiren|padikittu)\b",
         re.IGNORECASE,
@@ -310,6 +379,18 @@ def _clip_value(raw: str) -> str:
     return raw.strip()
 
 
+def _normalize_school_key(pseudo_key: str) -> tuple[str, str | None]:
+    """
+    Convert a school pseudo-key to the canonical DB key and education_status.
+    Returns (canonical_key, education_status).
+    """
+    if pseudo_key == "user_school_current":
+        return "user_school", "current"
+    if pseudo_key == "user_school_past":
+        return "user_school", "past"
+    return pseudo_key, None
+
+
 def _extract_by_regex(message: str) -> list[Fact]:
     """
     Deterministic regex extraction — no network calls.
@@ -356,6 +437,16 @@ def _extract_by_regex(message: str) -> list[Fact]:
                                       confidence=0.93, source="regex"))
                 break
 
+            elif key in ("user_school_current", "user_school_past"):
+                value = _clip_value(raw)
+                if value and len(value) > 1:
+                    canon_key, edu_status = _normalize_school_key(key)
+                    facts.append(Fact(key=canon_key, value=value,
+                                      category="education",
+                                      confidence=0.93, source="regex",
+                                      education_status=edu_status))
+                break
+
             elif key == "user_workplace":
                 value = _clip_value(raw)
                 if value and len(value) > 1:
@@ -373,9 +464,16 @@ def _extract_by_regex(message: str) -> list[Fact]:
             value = _clip_value(raw)
             if not value or len(value) < 2:
                 continue
-            facts.append(Fact(key=key, value=value,
-                              category=KNOWN_KEYS[key],
-                              confidence=0.97, source="regex"))
+            if key in ("user_school_current", "user_school_past"):
+                canon_key, edu_status = _normalize_school_key(key)
+                facts.append(Fact(key=canon_key, value=value,
+                                  category="education",
+                                  confidence=0.97, source="regex",
+                                  education_status=edu_status))
+            else:
+                facts.append(Fact(key=key, value=value,
+                                  category=KNOWN_KEYS[key],
+                                  confidence=0.97, source="regex"))
 
     return [f for f in facts if f.is_valid()]
 
@@ -524,6 +622,7 @@ def _persist(facts: list[Fact]) -> list[Fact]:
     - Manual facts are NEVER overwritten by regex or AI.
     - AI facts are only written if confidence is higher than existing.
     - Regex facts can overwrite AI facts (regex > AI in trust hierarchy).
+    - education_status is stored alongside user_school facts.
     """
     written: list[Fact] = []
     for fact in facts:
@@ -534,7 +633,7 @@ def _persist(facts: list[Fact]) -> list[Fact]:
             if ex_src == "manual":
                 logger.debug("Skipping overwrite of manual fact '%s'.", fact.key)
                 continue
-            # Regex can overwrite AI; AI cannot overwrite regex or itself at ≥ confidence
+            # Regex can overwrite AI; AI cannot overwrite regex or itself at >= confidence
             if fact.source == "ai" and ex_conf >= fact.confidence:
                 logger.debug(
                     "Skipping AI update of '%s': existing conf %.2f >= %.2f.",
@@ -548,10 +647,12 @@ def _persist(facts: list[Fact]) -> list[Fact]:
             category=fact.category,
             confidence=fact.confidence,
             source=fact.source,
+            education_status=fact.education_status,
         )
         written.append(fact)
-        logger.debug("Saved fact: %s = %s (src=%s, conf=%.2f)",
-                     fact.key, fact.value, fact.source, fact.confidence)
+        logger.debug("Saved fact: %s = %s (src=%s, conf=%.2f, edu=%s)",
+                     fact.key, fact.value, fact.source, fact.confidence,
+                     fact.education_status)
     return written
 
 

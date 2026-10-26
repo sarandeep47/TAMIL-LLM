@@ -34,7 +34,7 @@ from memory_db import (
     forget_memory,
     list_memories,
 )
-from chat_memory import answer_question, learn_fact, detect_language_style
+from chat_memory import answer_question, learn_fact, detect_language_style, acknowledge_statement
 from fact_extractor import extract_facts
 from training_review import (
     initialize_training_db,
@@ -60,6 +60,8 @@ _REMEMBER_KEY_MAP: dict[str, tuple[str, str | None]] = {
     "color":     ("favorite_colour",         None),
     "workplace": ("user_workplace",          None),
     "job":       ("user_job_title",          None),
+    "school":    ("user_school",             None),
+    "college":   ("user_school",             None),
     "learning":  ("user_learning",           None),
     "interest":  ("user_interest",           None),
     "skill":     ("user_skill",              None),
@@ -74,6 +76,7 @@ _KEY_CATEGORY: dict[str, str] = {
     "favorite_colour":         "preference",
     "user_workplace":          "work",
     "user_job_title":          "work",
+    "user_school":             "education",
     "user_learning":           "learning",
     "user_interest":           "interest",
     "user_skill":              "skill",
@@ -142,46 +145,88 @@ def build_memory_context() -> str | None:
 
 
 # ── Ollama chat call ─────────────────────────────────────────────────────────
+#
+# Root-cause notes (do not revert without re-reading these):
+#
+# 1. SINGLE system message: Ollama / llama3.2:3b does not reliably fuse
+#    multiple system-role messages; a second system block sometimes shadows the
+#    first, stripping the language rule.  Memory context is therefore appended
+#    inside the SAME system message.
+#
+# 2. Concrete language examples: abstract rule "reply in the same language"
+#    is often ignored by 3B-parameter models. Concrete few-shot examples are
+#    far more reliable.
+#
+# 3. History window: 6 turns keeps enough context for coherent conversation
+#    while reducing the chance that a stale hallucinated Tamil/English sentence
+#    contaminates the current response.
 
-_SYSTEM_PROMPT = """\
-You are a helpful, respectful Tamil/Tanglish/English assistant.
+_SYSTEM_PROMPT_BASE = """\
+You are a helpful, warm assistant that speaks Tamil, Tanglish, and English.
 
-Critical rules you must ALWAYS follow:
-1. Reply in the SAME language and script the user used.
-2. NEVER invent personal facts. If memory context is provided, use ONLY that.
-   If it is not provided, say you don't know — do not guess.
-3. NEVER claim the user lives somewhere, is learning something, or has a goal
-   unless that fact appears in the memory block below.
-4. Keep replies concise, warm, and natural. No sarcasm. No insults.
-5. Technical terms (Python, AI Engineer, etc.) stay in English even in Tamil replies.
-6. When the user introduces themselves ("My name is X"), acknowledge it simply.
-   Example good reply to "My name is Sarandeep": "Nice to meet you, Sarandeep!"
-   Example bad reply: "நீயும் Sarandeep!" (dismissive) or making jokes.
+════════════════════════════════════════
+LANGUAGE RULE — follow this every turn:
+  • User writes Tamil script (எ,ந,க…)  → you reply ONLY in Tamil script.
+  • User writes Tanglish (en, naan, enna, irukken…) → you reply ONLY in Tanglish.
+  • User writes English → you reply ONLY in English.
+Never mix languages in one reply unless the user explicitly mixes them first.
+════════════════════════════════════════
+
+EXAMPLES of correct language matching:
+  User: "My name is Sarandeep"
+  You:  "Nice to meet you, Sarandeep!"          ← English in, English out ✓
+
+  User: "Naan Python kathukittu irukken"
+  You:  "Super! Python romba useful language."   ← Tanglish in, Tanglish out ✓
+
+  User: "என் பெயர் சரண்தீப்"
+  You:  "சரி! சரண்தீப் என்று நினைவில் வைத்துக்கொள்கிறேன்."  ← Tamil in, Tamil out ✓
+
+MEMORY RULES:
+  • NEVER invent personal facts about the user.
+  • If the memory block below contains a fact, use it.
+  • If the memory block is empty or does not mention the asked fact, say you
+    don't know — do not guess.
+  • When the user states a fact ("My name is X"), acknowledge it briefly and
+    confirm you've saved it (one sentence max).
+
+STYLE: concise, respectful, warm. No sarcasm. No unsolicited advice.
+Technical terms (Python, AI Engineer, etc.) stay in English in all replies.
 """
 
 
+def _build_system_message(memory_ctx: str | None) -> str:
+    """Merge the base prompt and optional memory block into ONE system message."""
+    if not memory_ctx:
+        return _SYSTEM_PROMPT_BASE
+    return (
+        _SYSTEM_PROMPT_BASE
+        + "\n════════════════════════════════════════\n"
+        + "KNOWN FACTS ABOUT THIS USER (treat as ground truth):\n"
+        + memory_ctx
+        + "\n════════════════════════════════════════"
+    )
+
 
 def ask_ollama(user_message: str) -> str:
-    # 1. Try deterministic memory lookup first
-    memory_answer = learn_fact(user_message) or answer_question(user_message)
+    # 1. Deterministic short-circuits (no Ollama needed)
+    #    Priority: colour-learn → fact question → statement acknowledgment
+    memory_answer = (
+        learn_fact(user_message)
+        or answer_question(user_message)
+        or acknowledge_statement(user_message)
+    )
     if memory_answer:
         return memory_answer
 
-    # 2. Build messages list
-    messages: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
-
+    # 2. Build a SINGLE merged system message (fixes dual-system-message bug)
     memory_ctx = build_memory_context()
-    if memory_ctx:
-        messages.append({
-            "role":    "system",
-            "content": (
-                "Use the following memory when relevant. "
-                "Treat it as factual — do not contradict it:\n\n"
-                + memory_ctx
-            ),
-        })
+    system_msg = _build_system_message(memory_ctx)
 
-    messages.extend(get_recent_history())
+    messages: list[dict] = [{"role": "system", "content": system_msg}]
+
+    # 3. Append recent history (reduced to 6 turns to limit stale-context risk)
+    messages.extend(get_recent_history(limit=6))
     messages.append({"role": "user", "content": user_message})
 
     try:

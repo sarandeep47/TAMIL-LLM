@@ -8,7 +8,8 @@ Supported fact keys
 -------------------
 user_name, user_location, user_workplace, user_job_title,
 user_learning, user_interest, user_skill, user_goal,
-user_language_preference, user_response_style, favorite_colour
+user_language_preference, user_response_style, favorite_colour,
+user_school (with education_status: 'current' | 'past' | None)
 
 Language detection
 ------------------
@@ -20,13 +21,27 @@ Cross-language retrieval
 ------------------------
 If a fact was saved in English but the question was in Tamil/Tanglish,
 answer_question() falls back to the English value automatically.
+
+Tense distinction (user_school)
+--------------------------------
+education_status = 'current'  → "naa KLNCE il padikuren" (present-tense)
+education_status = 'past'     → "naa KLNCE la padichen" (past-tense)
+education_status = None        → unknown (e.g. saved via /remember)
+The response template picks the correct phrasing automatically.
+
+Personal-history safety guard
+------------------------------
+Questions about college, degrees, education, employment, and other
+personal facts that match _PERSONAL_HISTORY_GUARD_PATTERNS are
+blocked from reaching Ollama even if they don't match an intent pattern.
+They return a polite "I don't have that saved" message instead.
 """
 
 from __future__ import annotations
 
 import re
 
-from memory_db import initialize_database, get_memory
+from memory_db import initialize_database, get_memory, get_education_status
 
 initialize_database()
 
@@ -82,6 +97,51 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
         # English
         "what is my job", "what do i do", "what is my role",
         "what is my profession",
+    ],
+
+    "user_school": [
+        # Tamil script
+        "நான் எந்த கல்லூரியில் படித்தேன்",
+        "நான் எந்த பள்ளியில் படித்தேன்",
+        "என் கல்லூரி என்ன", "என் பள்ளி என்ன",
+        "எந்த கல்லூரியில் படித்தேன்",
+        "நான் எந்த கல்லூரியில் படிக்கிறேன்",
+        "நான் எங்கே படிக்கிறேன்",
+        # Tanglish — past-tense (padichen = studied) AND present-tense (padikuren = studying)
+        # "padichen"  → studied in the past
+        # "padikuren" → currently studying / enrolled
+        "en college enna", "en school enna",
+        # past-tense patterns
+        "naan enna college la padichen", "naa enna college la padichen",
+        "naan endha college la padichen", "naa endha college la padichen",
+        "naan enga college padichen", "naa enga college padichen",
+        "naan enna school la padichen", "naa enna school la padichen",
+        "naan endha school la padichen",
+        # present-tense patterns (currently enrolled)
+        "naan enna college la padikuren", "naa enna college la padikuren",
+        "naan enna college padikuren", "naa enna college padikuren",
+        "naan endha college la padikuren", "naa endha college la padikuren",
+        "naan enga college padikuren", "naa enga college padikuren",
+        "naan enna school la padikuren", "naa enna school la padikuren",
+        # present-tense short forms (naa/naan + college + padikuren)
+        "naa college la padikuren", "naan college la padikuren",
+        "naa college padikuren", "naan college padikuren",
+        # short form with "il" postposition (e.g. "naa KLNCE il padikuren")
+        "il padikuren", "il padichen",
+        "en college pathi", "en school pathi",
+        # English — degree / graduation questions map here too (temporal note in response)
+        "what is my school", "what is my college", "what college did i",
+        "what school did i", "where did i study", "where did i go to school",
+        "which college did i", "which school did i",
+        "where am i studying", "where do i study", "which college am i",
+        "what college am i", "where am i going to college",
+        # degree / graduation questions — routed to user_school so they get
+        # a deterministic answer from stored college fact, not Ollama
+        "which college degree", "college degree", "my degree",
+        "did i graduate", "where did i graduate", "where did i do my",
+        "my graduation", "my qualification",
+        "what degree do i have", "do i have a degree",
+        "have i done my degree", "have i completed my degree",
     ],
 
     "user_learning": [
@@ -159,7 +219,37 @@ _TANGLISH_WORDS: frozenset[str] = frozenset({
     "irukken", "iruken", "pudikkum", "peru", "peyar",
     "kathukkiren", "kathukittu", "velai", "seykiren",
     "panren", "pannren", "aaganum",
+    # past-tense study/college vocabulary
+    "padichen", "padichaen", "endha", "enga",
+    # present-tense study vocabulary
+    "padikuren", "padikittu",
 })
+
+
+# ── Personal-history safety guard ────────────────────────────────────────────
+#
+# Questions about personal facts that do NOT match any _INTENT_PATTERNS entry
+# must NOT fall through to Ollama. These guard patterns catch edge cases so
+# that personal-history questions always get a deterministic response.
+
+_PERSONAL_HISTORY_GUARD_PATTERNS: list[re.Pattern] = [
+    re.compile(p, re.IGNORECASE) for p in [
+        # Education / degree
+        r"\b(?:my|what(?:'s|\s+is)|which|where|did\s+i)\b[^?]*\b(?:degree|graduation|graduate|college|school|university|qualification|field\s+of\s+study|major|course|program)\b",
+        # Bare "what degree" / "do i have a degree"
+        r"\b(?:what|which)\s+degree\b",
+        r"\bdo\s+i\s+have\s+(?:a\s+)?degree\b",
+        r"\bhave\s+(?:i\s+)?done\s+(?:my\s+)?(?:degree|graduation|college)\b",
+        # Employment
+        r"\b(?:my|what(?:'s|\s+is)|where|did\s+i)\b[^?]*\b(?:job|work|workplace|employer|company|office|career|profession|role|position)\b",
+        # Tanglish education guard
+        r"\b(?:en|naa|naan)\b[^?]*\b(?:college|school|degree|padichen|padikuren|padichaen)\b",
+        # Tanglish job guard
+        r"\b(?:en|naa|naan)\b[^?]*\b(?:velai|work|job|office|company)\b",
+        # Tamil script guard (rough)
+        r"[\u0B80-\u0BFF].*(?:கல்லூரி|பள்ளி|படிக்கிறேன்|படித்தேன்|வேலை|பதவி|நிறுவன)",
+    ]
+]
 
 
 # ── Language detection ───────────────────────────────────────────────────────
@@ -202,7 +292,38 @@ def detect_intent(question: str) -> str | None:
 
 # ── Response templates ────────────────────────────────────────────────────────
 
-def _build_response(intent: str, value: str, style: str) -> str:
+def _build_response(intent: str, value: str, style: str, question: str = "") -> str:
+    """
+    Build a language-matched response for a fact retrieval.
+    For user_school, phrasing adapts to education_status or question tense.
+    """
+    # Tense-aware school responses
+    if intent == "user_school":
+        # 1. Try to read stored education_status
+        edu_status = get_education_status("user_school")
+        # 2. Override from the question text if possible
+        if question:
+            inferred = _infer_school_tense_from_message(question)
+            if inferred == "user_school_current":
+                edu_status = "current"
+            elif inferred == "user_school":
+                edu_status = edu_status or "past"
+
+        if edu_status == "current":
+            _SC = {
+                "tamil":    f"நீங்கள் தற்போது {value}-இல் படிக்கிறீர்கள்.",
+                "tanglish": f"Neenga ippo {value}-la padikureengga.",
+                "english":  f"You are currently studying at {value}.",
+            }
+            return _SC.get(style, f"You are currently studying at {value}.")
+        else:
+            _SP = {
+                "tamil":    f"உங்கள் கல்லூரி {value}.",
+                "tanglish": f"Unga college {value}.",
+                "english":  f"Your college/school is {value}.",
+            }
+            return _SP.get(style, f"Your college/school is {value}.")
+
     _T: dict[str, dict[str, str]] = {
         "user_name": {
             "tamil":    f"உங்கள் பெயர் {value}.",
@@ -228,6 +349,11 @@ def _build_response(intent: str, value: str, style: str) -> str:
             "tamil":    f"நீங்கள் {value} கற்கிறீர்கள்.",
             "tanglish": f"Neenga {value} kathukkireengga.",
             "english":  f"You are learning {value}.",
+        },
+        "user_school": {
+            "tamil":    f"உங்கள் கல்லூரி {value}.",
+            "tanglish": f"Unga college {value}.",
+            "english":  f"Your college/school is {value}.",
         },
         "user_interest": {
             "tamil":    f"உங்களுக்கு {value} பிடிக்கும்.",
@@ -264,7 +390,244 @@ def _build_response(intent: str, value: str, style: str) -> str:
     return group.get(style, f"Your {intent.replace('_', ' ')} is {value}.")
 
 
+# ── Statement-acknowledgment map ─────────────────────────────────────────────
+#
+# When the user makes a personal-fact statement (not a question), the chatbot
+# should acknowledge it briefly and in the correct language/style.
+# These templates are keyed by (intent_key, language_style).
+
+_ACK_TEMPLATES: dict[str, dict[str, str]] = {
+    "user_name": {
+        "tamil":    "சரி! உங்கள் பெயர் {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Unga peyar {value} nu note panniten.",
+        "english":  "Got it! I'll remember your name is {value}.",
+    },
+    "user_location": {
+        "tamil":    "சரி! நீங்கள் {value} பகுதியில் வசிக்கிறீர்கள் என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Neenga {value}-la irukkeenga nu save panniten.",
+        "english":  "Got it! I'll remember you're in {value}.",
+    },
+    "user_workplace": {
+        "tamil":    "சரி! நீங்கள் {value}-இல் வேலை செய்கிறீர்கள் என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Neenga {value}-la velai seykireengga nu save panniten.",
+        "english":  "Got it! I'll remember you work at {value}.",
+    },
+    "user_learning": {
+        "tamil":    "சரி! நீங்கள் {value} கற்கிறீர்கள் என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Neenga {value} kathukureengga nu save panniten.",
+        "english":  "Got it! I'll remember you're learning {value}.",
+    },
+    "user_school": {
+        "tamil":    "சரி! நீங்கள் {value}-இல் படித்தீர்கள் என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Neenga {value}-la padicheenga nu save panniten.",
+        "english":  "Got it! I'll remember you studied at {value}.",
+    },
+    # Separate templates for present-tense school (padikuren / am studying)
+    "user_school_current": {
+        "tamil":    "சரி! நீங்கள் தற்போது {value}-இல் படிக்கிறீர்கள் என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Neenga ippo {value}-la padikureengga nu save panniten.",
+        "english":  "Got it! I'll remember you're currently studying at {value}.",
+    },
+    "user_goal": {
+        "tamil":    "சரி! உங்கள் இலக்கு {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Unga goal {value} nu save panniten.",
+        "english":  "Got it! I'll remember your goal is {value}.",
+    },
+    "user_interest": {
+        "tamil":    "சரி! உங்களுக்கு {value} பிடிக்கும் என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Ungalukku {value} pudikkum nu save panniten.",
+        "english":  "Got it! I'll remember you're interested in {value}.",
+    },
+    "user_skill": {
+        "tamil":    "சரி! உங்கள் திறமை {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Unga skill {value} nu save panniten.",
+        "english":  "Got it! I'll remember your skill is {value}.",
+    },
+    "user_job_title": {
+        "tamil":    "சரி! உங்கள் பதவி {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Unga job {value} nu save panniten.",
+        "english":  "Got it! I'll remember your job title is {value}.",
+    },
+    "user_language_preference": {
+        "tamil":    "சரி! உங்கள் மொழி விருப்பம் {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Unga language preference {value} nu save panniten.",
+        "english":  "Got it! I'll remember you prefer {value}.",
+    },
+    "user_response_style": {
+        "english":  "Got it! I'll respond in {value} style.",
+        "tanglish": "Seri! {value} style-la respond pannuvom.",
+        "tamil":    "சரி! {value} பாணியில் பதிலளிக்கிறேன்.",
+    },
+    "favorite_colour": {
+        "tamil":    "சரி! உங்களுக்கு பிடித்த நிறம் {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Ungalukku pidicha colour {value} nu save panniten.",
+        "english":  "Got it! I'll remember your favourite colour is {value}.",
+    },
+}
+
+# ── Statement-intent patterns ─────────────────────────────────────────────────
+#
+# Mirror of _INTENT_PATTERNS but for *statements* (declarative, not questions).
+# Used by acknowledge_statement() to detect which fact was just stated.
+
+_STATEMENT_PATTERNS: dict[str, list[str]] = {
+    "user_name": [
+        # Tamil
+        "என் பெயர் ", "என்னுடைய பெயர் ",
+        # Tanglish
+        "en peyar ", "en peru ", "ennoda peyar ", "ennoda peru ",
+        # English
+        "my name is ",
+    ],
+    # user_school MUST come before user_learning so "i'm studying at X"
+    # matches school before learning's "i'm studying " prefix fires.
+    "user_school": [
+        # Tamil
+        "படித்தேன்", "கல்லூரியில் படித்தேன்", "பள்ளியில் படித்தேன்",
+        # Tamil present-tense
+        "படிக்கிறேன்", "கல்லூரியில் படிக்கிறேன்",
+        # Tanglish — past-tense study verbs ("padichen" = I studied)
+        "la padichen", "la padichaen", "college la padi", "school la padi",
+        "college padichen", "school padichen",
+        # Tanglish — present-tense study verbs ("padikuren" = I am studying)
+        "la padikuren", "college padikuren", "school padikuren",
+        "il padikuren", "college il padikuren", "school il padikuren",
+        # English — more specific "studying AT" before learning's "studying "
+        "i am studying at ", "i'm studying at ", "i study at ",
+        "i studied at ", "i went to college ", "i went to school ",
+        "my college is ", "my school is ",
+    ],
+    "user_learning": [
+        # Tamil substrings (check learning BEFORE location to avoid "naan" clash)
+        "கற்றுக்கொண்டு இருக்கிறேன்", "கற்கிறேன்",
+        # Tanglish — specific present-tense verb endings
+        "kathukittu irukken", "kathukkittu irukken",
+        "kathukkiren", "kathukiren", "padikiren", "padikittu",
+        # English — only bare "studying" without "at" (school catches "studying at")
+        "i'm learning ", "i am learning ",
+        "i'm studying ", "i am studying ",
+    ],
+    "user_workplace": [
+        "i work at ", "i work for ", "i work in ",
+        "i am working at ", "i'm working at ",
+        "வேலை செய்கிறேன்",
+        "la work panren", "la velai seykiren",
+    ],
+    "user_goal": [
+        "my goal is ", "i want to become ",
+        "en goal ", "என் இலக்கு ", "என்னுடைய இலக்கு ", "ஆக வேண்டும்",
+    ],
+    "user_location": [
+        "i live in ", "i am from ", "i'm from ", "i am based in ",
+        "naan enga vasikiren", "naan enga irukken",
+    ],
+    "user_interest": [
+        "i like ", "i love ", "i enjoy ", "my hobby is ", "my interest is ",
+        "எனக்கு பிடிக்கும்", "எனக்குப் பிடிக்கும்",
+        "enakku ", # combined with pudikkum
+    ],
+    "user_skill": [
+        "i can ", "my skill is ", "i know how to ",
+        "என் திறமை ",
+    ],
+}
+
+
+def _detect_statement_intent(message: str) -> str | None:
+    """
+    Return the canonical fact key if the message is a personal-fact *statement*
+    (not a question). Returns None if no known statement pattern matches.
+    """
+    msg_lower = message.lower()
+    msg_orig  = message
+
+    for key, phrases in _STATEMENT_PATTERNS.items():
+        for phrase in phrases:
+            if _is_tamil(phrase):
+                if phrase in msg_orig:
+                    return key
+            else:
+                if phrase in msg_lower:
+                    return key
+    return None
+
+
+def _infer_school_tense_from_message(message: str) -> str:
+    """
+    Infer whether a school statement/question is present- or past-tense.
+    Returns 'user_school_current' (present) or 'user_school' (past/unknown).
+
+    Present markers: padikuren, padikittu, am studying, study at, currently
+    Past markers:    padichen, padichaen, studied at, did i study, went to
+    """
+    m = message.lower()
+    present_markers = [
+        "padikuren", "padikittu", "am studying", "i'm studying",
+        "i study at", "currently study", "study at",
+        "படிக்கிறேன்", "படிக்கிறீர்கள்",
+    ]
+    past_markers = [
+        "padichen", "padichaen", "studied at", "went to", "did i study",
+        "padicheenga", "படித்தேன்", "படித்தீர்கள்",
+    ]
+    for pm in present_markers:
+        if pm in m or pm in message:
+            return "user_school_current"
+    for pm in past_markers:
+        if pm in m or pm in message:
+            return "user_school"
+    # Fall back to stored education_status
+    stored = get_education_status("user_school")
+    if stored == "current":
+        return "user_school_current"
+    return "user_school"
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
+
+def acknowledge_statement(message: str) -> str | None:
+    """
+    When the user makes a personal-fact statement (not a question), return a
+    brief, language-matched acknowledgment using the just-saved fact value from
+    the DB.  Returns None if the message is not a recognisable statement.
+
+    This prevents statements from being passed to Ollama for an uncontrolled
+    free-form response, which is the root cause of wrong-language replies after
+    saving a fact.
+
+    For user_school statements, the tense is inferred from the message:
+    present-tense markers (padikuren, am studying, study at) produce a
+    'currently studying' acknowledgment; past-tense markers produce a
+    'previously studied' acknowledgment.
+    """
+    intent = _detect_statement_intent(message)
+    if intent is None:
+        return None
+
+    # Only acknowledge if we can confirm the fact is actually in the DB
+    value = get_memory(intent, language="english")
+    if value is None:
+        return None
+
+    style = detect_language_style(message)
+
+    # For school, use tense-specific template
+    if intent == "user_school":
+        tmpl_key = _infer_school_tense_from_message(message)
+        tmpl = _ACK_TEMPLATES.get(tmpl_key, {}).get(style)
+        if not tmpl:
+            tmpl = _ACK_TEMPLATES.get("user_school", {}).get(style)
+        if tmpl:
+            return tmpl.format(value=value)
+    else:
+        tmpl = _ACK_TEMPLATES.get(intent, {}).get(style)
+        if tmpl:
+            return tmpl.format(value=value)
+
+    # Fallback: generic English ack
+    key_label = intent.replace("user_", "").replace("_", " ")
+    return f"Got it! I'll remember your {key_label} is {value}."
+
 
 def answer_question(question: str) -> str | None:
     """
@@ -272,16 +635,25 @@ def answer_question(question: str) -> str | None:
 
     Returns a formatted string if intent matches and fact is stored.
     Returns a polite "not saved" message if intent matches but no fact.
-    Returns None if no intent matched (caller should try Ollama).
+    Returns None if no intent matched AND the safety guard didn't trigger
+    (caller should try Ollama for truly general questions).
 
     Cross-language: if the user asks in Tamil but the fact was saved as
     English, the English value is returned (formatted in Tamil grammar).
     """
     intent = detect_intent(question)
-    if intent is None:
-        return None
+    style  = detect_language_style(question)
 
-    style = detect_language_style(question)
+    if intent is None:
+        # Safety guard: personal-history questions must not reach Ollama
+        if is_personal_history_question(question):
+            _not_saved = {
+                "tamil":    "இந்தத் தகவல் இன்னும் சேமிக்கப்படவில்லை.",
+                "tanglish": "Antha thakaval innama save aagalai.",
+                "english":  "That information hasn't been saved yet.",
+            }
+            return _not_saved.get(style, "That information hasn't been saved yet.")
+        return None
 
     # Try requested language first, then fall back to English
     value = get_memory(intent, language=style)
@@ -296,7 +668,17 @@ def answer_question(question: str) -> str | None:
         }
         return _not_saved.get(style, "That information hasn't been saved yet.")
 
-    return _build_response(intent, value, style)
+    return _build_response(intent, value, style, question=question)
+
+
+def is_personal_history_question(text: str) -> bool:
+    """
+    Return True if the text looks like a personal-history question
+    (college, degree, job, etc.) that should NOT fall through to Ollama.
+
+    Used by chatbot.py as a second-tier safety net after detect_intent().
+    """
+    return any(p.search(text) for p in _PERSONAL_HISTORY_GUARD_PATTERNS)
 
 
 def learn_fact(message: str) -> str | None:
