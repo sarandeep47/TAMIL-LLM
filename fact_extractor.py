@@ -290,15 +290,48 @@ _ASCII_REGEXES: list[tuple[str, re.Pattern]] = [
     ("user_goal", re.compile(
         r"en goal\s+([A-Z][A-Za-z]+(?:\s+[A-Za-z]+)*)",
     )),
-    # School — PAST tense (padichen = I studied)
-    # Must come BEFORE learning patterns to avoid mis-classifying school as learning
-    ("user_school_past", re.compile(
-        r"(?:naa|naan)\s+([A-Za-z][\w\s.,&\-]{1,60}?)\s+(?:la|il|le)\s+padichen\b",
+    # Field of Study — PAST tense (padichen)
+    # Pattern 1: "naa CSE padichen college la" — field before "padichen college"
+    ("user_field_of_study", re.compile(
+        r"(?:naa|naan)\s+([a-z]+(?:\s+[a-z]+)?)\s+padichen\s+college\b",
         re.IGNORECASE,
     )),
-    ("user_school_past", re.compile(
-        r"(?:naa|naan)\s+([A-Za-z][\w\s.,&\-]{1,60}?)\s+padichen\b",
+    ("user_field_of_study", re.compile(
+        r"(?:naa|naan)\s+([a-z]+(?:\s+[a-z]+)?)\s+padichen\s+(?:la|il|le)\s+college\b",
         re.IGNORECASE,
+    )),
+    # Pattern 2: Alternative word order - "naa college la CSE padichen"
+    # (field after postposition+college keyword)
+    ("user_field_of_study", re.compile(
+        r"(?:naa|naan)\s+college\s+(?:la|il|le)\s+([a-z]+(?:\s+[a-z]+)?)\s+padichen\b",
+        re.IGNORECASE,
+    )),
+    # Field of Study — PRESENT tense (padikuren)
+    # Pattern 1: "naa CSE padikuren college la"
+    ("user_field_of_study", re.compile(
+        r"(?:naa|naan)\s+([a-z]+(?:\s+[a-z]+)?)\s+padikuren\s+college\b",
+        re.IGNORECASE,
+    )),
+    ("user_field_of_study", re.compile(
+        r"(?:naa|naan)\s+([a-z]+(?:\s+[a-z]+)?)\s+padikuren\s+(?:la|il|le)\s+college\b",
+        re.IGNORECASE,
+    )),
+    # Pattern 2: Alternative word order - "naa college la CSE padikuren"
+    ("user_field_of_study", re.compile(
+        r"(?:naa|naan)\s+college\s+(?:la|il|le)\s+([a-z]+(?:\s+[a-z]+)?)\s+padikuren\b",
+        re.IGNORECASE,
+    )),
+    # School — PAST tense (padichen = I studied)
+    # Must come AFTER field-of-study to avoid mis-classifying field as school
+    # Only match words with UPPERCASE FIRST LETTER (institutions)
+    # Require 4+ chars to avoid matching 3-letter field acronyms like "CSE"
+    # Pattern 1: "naa <Institution> la padichen" (with postposition + la/il/le)
+    ("user_school_past", re.compile(
+        r"(?:naa|naan)\s+(?=[A-Z])([A-Za-z][\w\s.,\-]{2,}?)\s+(?:la|il|le)\s+padichen\b",
+    )),
+    # Pattern 2: "naa <Institution> padichen" (without postposition, requires full name)
+    ("user_school_past", re.compile(
+        r"(?:naa|naan)\s+(?=[A-Z])([A-Za-z][\w\s.,\-]{3,})\s+padichen\b",
     )),
     ("user_school_past", re.compile(
         r"i\s+studied\s+at\s+([A-Za-z][\w\s.,&\-]{1,60}?)(?:[.!,]|$)",
@@ -313,13 +346,15 @@ _ASCII_REGEXES: list[tuple[str, re.Pattern]] = [
         re.IGNORECASE,
     )),
     # School — PRESENT tense (padikuren = I am studying)
+    # Capture college name, stopping at postpositions (la, il, le)
+    # School (Tanglish current) - require 4+ chars to avoid matching 3-letter field acronyms like "CSE"
+    # Pattern 1: "naa <Institution> la padikuren" (with postposition + la/il/le)
     ("user_school_current", re.compile(
-        r"(?:naa|naan)\s+([A-Za-z][\w\s.,&\-]{1,60}?)\s+(?:la|il|le)\s+padikuren\b",
-        re.IGNORECASE,
+        r"(?:naa|naan)\s+(?=[A-Z])([A-Za-z][\w\s.,\-]{2,}?)\s+(?:la|il|le)\s+padikuren\b",
     )),
+    # Pattern 2: "naa <Institution> padikuren" (without postposition, requires full name)
     ("user_school_current", re.compile(
-        r"(?:naa|naan)\s+([A-Za-z][\w\s.,&\-]{1,60}?)\s+padikuren\b",
-        re.IGNORECASE,
+        r"(?:naa|naan)\s+(?=[A-Z])([A-Za-z][\w\s.,\-]{3,})\s+padikuren\b",
     )),
     # "I'm studying at X" — must come BEFORE the bare "i'm studying X" learning pattern
     ("user_school_current", re.compile(
@@ -330,17 +365,24 @@ _ASCII_REGEXES: list[tuple[str, re.Pattern]] = [
         r"i\s+study\s+at\s+([A-Za-z][\w\s.,&\-]{1,60}?)(?:[.!,]|$)",
         re.IGNORECASE,
     )),
-    # Learning (Tanglish verb forms) — after school patterns
+    # Learning (Tanglish verb forms: padikiren = learning, NOT padikuren = studying at college)
+    # Explicitly exclude padikuren to avoid confusion
     ("user_learning", re.compile(
         r"naan\s+([A-Za-z][\w+#.-]{0,30})\s+(?:kathukittu|kathukkitu|kathukkiren|kathukiren|padikiren|padikittu)\b",
         re.IGNORECASE,
     )),
-    # Learning (English)
+    # Learning (English) — must NOT match "studying at" (that's school)
+    # Only match "learning X" or "studying X" where X is not "at"
     ("user_learning", re.compile(
-        r"i(?:'m| am)\s+(?:learning|studying)\s+([A-Za-z][\w+# .-]{1,40})",
+        r"i(?:'m| am)\s+learning\s+([A-Za-z][\w+# .-]{1,40})(?:[.!,]|$)",
         re.IGNORECASE,
     )),
-    # Learning (Tanglish: "naan X padikiren")
+    # Studying without "at" — for cases like "I'm studying Python"
+    ("user_learning", re.compile(
+        r"i(?:'m| am)\s+studying\s+(?!at\s)([A-Za-z][\w+# .-]{1,40})(?:[.!,]|$)",
+        re.IGNORECASE,
+    )),
+    # Learning (Tanglish: "naan X padikiren" — note: padikiren not padikuren)
     ("user_learning", re.compile(
         r"naan\s+([A-Za-z][\w+#.-]{0,30})\s+padikiren\b",
         re.IGNORECASE,
@@ -456,16 +498,30 @@ def _extract_by_regex(message: str) -> list[Fact]:
                 break
 
     else:
+        # Track which canonical keys we've already extracted to avoid duplicates
+        extracted_keys = set()
         for key, pattern in _ASCII_REGEXES:
             m = pattern.search(s)
             if not m:
                 continue
+            
+            # Determine canonical key (for school, normalize pseudo-key)
+            if key in ("user_school_current", "user_school_past"):
+                canon_key, edu_status = _normalize_school_key(key)
+            else:
+                canon_key = key
+                edu_status = None
+            
+            # Skip if we already extracted this canonical key
+            if canon_key in extracted_keys:
+                continue
+            
             raw = m.group(1)
             value = _clip_value(raw)
             if not value or len(value) < 2:
                 continue
+            
             if key in ("user_school_current", "user_school_past"):
-                canon_key, edu_status = _normalize_school_key(key)
                 facts.append(Fact(key=canon_key, value=value,
                                   category="education",
                                   confidence=0.97, source="regex",
@@ -474,6 +530,8 @@ def _extract_by_regex(message: str) -> list[Fact]:
                 facts.append(Fact(key=key, value=value,
                                   category=KNOWN_KEYS[key],
                                   confidence=0.97, source="regex"))
+            
+            extracted_keys.add(canon_key)
 
     return [f for f in facts if f.is_valid()]
 

@@ -123,6 +123,14 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
         "naan endha college la padikuren", "naa endha college la padikuren",
         "naan enga college padikuren", "naa enga college padikuren",
         "naan enna school la padikuren", "naa enna school la padikuren",
+        # present-tense bare question forms (enga = where, entha = which/what)
+        "naa enga padikuren", "naan enga padikuren",
+        "naa entha padikuren", "naan entha padikuren",
+        "naa entha college la padikuren", "naan entha college la padikuren",
+        # present-tense with "enna kalloori" / "entha kalloori" (what/which college)
+        "naa enna kalloori il padikuren", "naan enna kalloori il padikuren",
+        "naa entha kalloori il padikuren", "naan entha kalloori il padikuren",
+        "naa enna school il padikuren", "naan enna school il padikuren",
         # present-tense short forms (naa/naan + college + padikuren)
         "naa college la padikuren", "naan college la padikuren",
         "naa college padikuren", "naan college padikuren",
@@ -142,6 +150,20 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
         "my graduation", "my qualification",
         "what degree do i have", "do i have a degree",
         "have i done my degree", "have i completed my degree",
+    ],
+
+    "user_field_of_study": [
+        # Tamil script
+        "நான் என்ன படித்தேன்",
+        "என் பிரிவு என்ன", "என் சரியாக என்ன",
+        # Tanglish — past and present tense
+        "en field enna", "en major enna",
+        "naa enna padichen", "naa entha padichen",
+        "naa enna padikuren", "naa entha padikuren",
+        "what did i study", "what do i study",
+        "what is my major", "what is my field", "what is my field of study",
+        "what is my specialization",
+        "which field did i study",
     ],
 
     "user_learning": [
@@ -355,6 +377,11 @@ def _build_response(intent: str, value: str, style: str, question: str = "") -> 
             "tanglish": f"Unga college {value}.",
             "english":  f"Your college/school is {value}.",
         },
+        "user_field_of_study": {
+            "tamil":    f"உங்கள் படிப்பு {value}.",
+            "tanglish": f"Unga field of study {value}.",
+            "english":  f"Your field of study is {value}.",
+        },
         "user_interest": {
             "tamil":    f"உங்களுக்கு {value} பிடிக்கும்.",
             "tanglish": f"Ungalukku {value} pudikkum.",
@@ -428,6 +455,11 @@ _ACK_TEMPLATES: dict[str, dict[str, str]] = {
         "tanglish": "Seri! Neenga ippo {value}-la padikureengga nu save panniten.",
         "english":  "Got it! I'll remember you're currently studying at {value}.",
     },
+    "user_field_of_study": {
+        "tamil":    "சரி! உங்கள் படிப்பு {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Unga field of study {value} nu save panniten.",
+        "english":  "Got it! I'll remember your field of study is {value}.",
+    },
     "user_goal": {
         "tamil":    "சரி! உங்கள் இலக்கு {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
         "tanglish": "Seri! Unga goal {value} nu save panniten.",
@@ -496,6 +528,18 @@ _STATEMENT_PATTERNS: dict[str, list[str]] = {
         "i am studying at ", "i'm studying at ", "i study at ",
         "i studied at ", "i went to college ", "i went to school ",
         "my college is ", "my school is ",
+    ],
+    "user_field_of_study": [
+        # Tanglish — field of study patterns with "padichen" (studied) or "padikuren" (studying)
+        "padichen college", "padikuren college",
+        # Alternative: explicit field+verb patterns
+        "cse padichen", "cse padikuren",
+        "it padichen", "it padikuren",
+        "ece padichen", "ece padikuren",
+        "mechanical padichen", "mechanical padikuren",
+        # English
+        "i studied ", "i'm studying ", "i studied at ",
+        "my major is ", "my field is ", "my specialization is ",
     ],
     "user_learning": [
         # Tamil substrings (check learning BEFORE location to avoid "naan" clash)
@@ -635,17 +679,27 @@ def answer_question(question: str) -> str | None:
 
     Returns a formatted string if intent matches and fact is stored.
     Returns a polite "not saved" message if intent matches but no fact.
-    Returns None if no intent matched AND the safety guard didn't trigger
-    (caller should try Ollama for truly general questions).
+    Returns None if:
+      - The input is a statement (not a question), so acknowledge_statement() can handle it
+      - It's a true general question (no personal-fact keywords)
 
     Cross-language: if the user asks in Tamil but the fact was saved as
     English, the English value is returned (formatted in Tamil grammar).
     """
+    # Import here to avoid circular dependency
+    from fact_extractor import _looks_like_personal_statement
+    
     intent = detect_intent(question)
     style  = detect_language_style(question)
 
     if intent is None:
-        # Safety guard: personal-history questions must not reach Ollama
+        # If this looks like a statement (not a question), don't handle it here
+        # — let acknowledge_statement() process it instead
+        if _looks_like_personal_statement(question):
+            return None
+        
+        # Safety guard: QUESTIONS about personal facts that don't match a specific
+        # pattern must not reach Ollama. But don't block statements.
         if is_personal_history_question(question):
             _not_saved = {
                 "tamil":    "இந்தத் தகவல் இன்னும் சேமிக்கப்படவில்லை.",

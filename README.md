@@ -206,10 +206,195 @@ TAMIL-LLM/
 
 ---
 
+---
+
+## 🌐 Web Interface (ChatGPT-style)
+
+### Overview
+
+Instead of the terminal chatbot, you can now chat via a web browser. The web interface:
+- Connects to the same backend (same memory, same logic, same safeguards)
+- Shows messages in a ChatGPT-like layout
+- Persists conversation history locally
+- Displays health status for Ollama
+
+### Architecture
+
+```
+Frontend (React + Vite)        Backend (FastAPI)         Chatbot Logic
+    http://localhost:5173   ←→   http://localhost:8000  ←→  ask_ollama()
+                                                              memory_db.py
+                                                              fact_extractor.py
+                                                              ↓ Ollama
+```
+
+### Prerequisites
+
+- **Python 3.11+** with FastAPI installed
+- **Node.js 16+** and npm for frontend
+- **Ollama** running locally (`ollama serve`)
+
+### Installation
+
+#### 1. Backend setup
+
+```powershell
+# Install backend dependencies
+cd backend
+pip install -r requirements.txt
+
+# Create .env from template
+copy .env.example .env
+```
+
+#### 2. Frontend setup
+
+```powershell
+# Install frontend dependencies
+cd frontend
+npm install
+```
+
+### Startup
+
+#### Option A: Terminal 1 + Terminal 2 (Recommended for development)
+
+**Terminal 1 — Backend:**
+```powershell
+cd backend
+python main.py
+# Output: API listening at http://localhost:8000
+# Docs available at http://localhost:8000/docs
+```
+
+**Terminal 2 — Frontend:**
+```powershell
+cd frontend
+npm run dev
+# Output: http://localhost:5173/
+```
+
+Then open **http://localhost:5173** in your browser.
+
+#### Option B: Scripted startup (Windows batch file)
+
+Create `start_web.bat` in the project root:
+
+```batch
+@echo off
+start cmd /k "cd backend && python main.py"
+start cmd /k "cd frontend && npm run dev"
+echo Open http://localhost:5173 in your browser
+pause
+```
+
+Run:
+```powershell
+.\start_web.bat
+```
+
+### Usage
+
+1. **Open http://localhost:5173** in your browser
+2. **Type a message** and press Enter or click Send
+3. **Wait for response** (loading spinner shows while processing)
+4. **View saved facts** — sidebar shows past conversations
+5. **Check status** — green dot at bottom left means Ollama is ready
+
+### API Endpoints
+
+All endpoints use JSON and CORS-protected (localhost:5173 only in dev).
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/health` | Check Ollama status |
+| POST | `/api/chat` | Send message, get response |
+| GET | `/api/memories` | List all saved personal facts |
+
+#### Example: POST /api/chat
+
+Request:
+```json
+{
+  "message": "naa cse padichen college la"
+}
+```
+
+Response (200 OK):
+```json
+{
+  "reply": "Seri! Unga field of study CSE nu save panniten.",
+  "language": "tanglish",
+  "extracted_facts": [
+    {"key": "user_field_of_study", "value": "CSE"}
+  ]
+}
+```
+
+Error response (503 Service Unavailable):
+```json
+{
+  "error": "Ollama connection failed. Make sure Ollama is running on http://localhost:11434/api/chat"
+}
+```
+
+### Configuration
+
+Edit `backend/.env`:
+
+```bash
+# Ollama settings
+OLLAMA_URL=http://localhost:11434/api/chat
+MODEL=llama3.2:3b
+
+# API port
+API_PORT=8000
+
+# Frontend origin (CORS)
+FRONTEND_ORIGIN=http://localhost:5173
+
+# Debug mode (enables CORS for all origins, auto-reload)
+DEBUG=false
+```
+
+### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| **"Ollama unavailable"** | Make sure `ollama serve` is running in another terminal |
+| **Backend crashes on startup** | Check that port 8000 is not in use: `netstat -ano \| findstr :8000` |
+| **Frontend won't load** | Check that port 5173 is free; Vite will use a different port if needed |
+| **CORS error in browser console** | Verify `FRONTEND_ORIGIN` in `backend/.env` matches your dev URL |
+| **Messages not being saved** | Check `data/processed/memory.db` exists and is writable |
+| **API returns 400 "Message cannot be empty"** | Don't send blank messages |
+
+### API Tests
+
+```powershell
+cd backend
+python -m pytest tests/test_api.py -v
+
+# Requires Ollama running (tests will skip if unavailable)
+```
+
+### Build for production
+
+```powershell
+cd frontend
+npm run build
+# Output: dist/ folder (static HTML/CSS/JS)
+```
+
+Deploy `dist/` to any static host (Vercel, GitHub Pages, nginx, etc).
+
+**Note**: Backend API still needs to run separately. Add `FRONTEND_ORIGIN` for your production domain.
+
+---
+
 ## 🔜 Next Steps (Priority)
 
 1. Add a real Tamil corpus (1+ MB) to `data/tamil.txt`
 2. GPU support in `train.py`
 3. Top-k / nucleus sampling in `generate.py`
-4. Web UI (Flask/FastAPI) for the chatbot
+4. WebSocket streaming for real-time responses (instead of HTTP long-polling)
 5. Semantic similarity memory retrieval (replace keyword-only matching)
