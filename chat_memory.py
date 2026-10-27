@@ -100,7 +100,10 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
         "நான் எங்கே வசிக்கிறேன்", "என் ஊர் என்ன",
         # Tanglish
         "naan enga irukken", "naan enga iruken", "naan enga irukkiren",
-        "naan enga vasikiren", "entha ooru", "en ooru",
+        "naa enga irukken", "naa enga iruken", "naa enga irukkiren",  # lowercase naa
+        "enga irukken", "enga iruken",  # bare "where are you"
+        "naan enga vasikiren", "naa enga vasikiren",
+        "entha ooru", "en ooru", "enga ooru",
         # English
         "where do i live", "where am i from", "what is my location",
         "where am i based",
@@ -145,6 +148,10 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
         "naan enga college padichen", "naa enga college padichen",
         "naan enna school la padichen", "naa enna school la padichen",
         "naan endha school la padichen",
+        # CRITICAL: BARE past-tense queries (just "padichen" without college/school word)
+        # User says "naa enga padichen?" (where did I study?) — MUST match
+        "naa enga padichen", "naan enga padichen",
+        "naa entha padichen", "naan entha padichen",
         # present-tense patterns (currently enrolled)
         "naan enna college la padikuren", "naa enna college la padikuren",
         "naan enna college padikuren", "naa enna college padikuren",
@@ -165,6 +172,10 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
         # short form with "il" postposition (e.g. "naa KLNCE il padikuren")
         "il padikuren", "il padichen",
         "en college pathi", "en school pathi",
+        # CRITICAL: SIMPLE DIRECT QUERIES
+        "entha college", "entha school",  # "what college", "what school"
+        "naa college", "naan college",    # "my college", "my school"
+        "naa school", "naan school",
         # English — degree / graduation questions map here too (temporal note in response)
         "what is my school", "what is my college", "what college did i",
         "what school did i", "where did i study", "where did i go to school",
@@ -599,8 +610,17 @@ _STATEMENT_PATTERNS: dict[str, list[str]] = {
         "en goal ", "என் இலக்கு ", "என்னுடைய இலக்கு ", "ஆக வேண்டும்",
     ],
     "user_location": [
+        # English
         "i live in ", "i am from ", "i'm from ", "i am based in ",
-        "naan enga vasikiren", "naan enga irukken", "entha ooru", "en ooru",
+        # Tanglish: statements about where you live/are
+        "naan enga vasikiren", "naan enga irukken", 
+        "naa enga irukken", "naa irukken",  # bare "I am" statement
+        # Tanglish: statements about where you came from (origin)
+        "naa irundhu varen", "irundhu varen",  # "I am coming from"
+        "la irundhu varen",  # "from X"
+        "irundhu varen",  # "coming from"
+        # Simple past/present residence queries
+        "entha ooru", "en ooru",
     ],
     "user_interest": [
         "i like ", "i love ", "i enjoy ", "my hobby is ", "my interest is ",
