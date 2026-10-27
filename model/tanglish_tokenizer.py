@@ -43,7 +43,7 @@ class Token:
         is_proper_noun: bool = False,
     ):
         self.word = word
-        self.canonical = canonical or word
+        self.canonical = canonical  # Keep as None if not provided
         self.category = category
         self.similarity_score = similarity_score
         self.is_proper_noun = is_proper_noun
@@ -175,8 +175,8 @@ def extract_statements_from_tokens(tokens: List[Token]) -> Statement:
     Heuristics:
         1. First "greeting" category token → greeting fact
         2. Pronouns (naan, neenga) → subject_pronoun
-        3. "en" or "enoda" → object pronoun (possessive marker for next name)
-        4. Unknown/capitalized word after possessive → name
+        3. "en" or "enoda" or "peru"/"peyar" → object pronoun or name marker
+        4. Unknown/capitalized word after possessive/name marker → name
         5. "irundhu" marker → next location word is origin
         6. Location category tokens → location
         7. Verb tokens → verb + infer tense from category
@@ -205,9 +205,11 @@ def extract_statements_from_tokens(tokens: List[Token]) -> Statement:
             i += 1
             continue
         
-        # Possessive markers (en, enoda = my, your)
-        if token.canonical in ["en", "enoda"]:
-            stmt.object_pronoun = token.canonical
+        # Possessive markers (en, enoda = my, your) or name markers (peru, peyar = name)
+        if token.canonical in ["en", "enoda", "peru", "peyar"]:
+            if token.canonical in ["en", "enoda"]:
+                stmt.object_pronoun = token.canonical
+            
             # Next word is likely the name
             if i + 1 < len(tokens):
                 next_token = tokens[i + 1]

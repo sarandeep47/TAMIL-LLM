@@ -46,6 +46,23 @@ from tanglish_understanding import understand_tanglish, TanglishIntent
 
 initialize_database()
 
+# ── Word-by-word tokenization integration ────────────────────────────────────
+#
+# Uses tanglish_tokenizer.py for multi-fact extraction from single statements.
+# Called by detect_intent() as a fallback when traditional pattern matching fails.
+#
+# STATUS: DISABLED - Tokenizer creates false positives (capitalizes ALL words as names).
+#         Re-enable only after fixing: (1) capitalization heuristic (2) fact confidence
+#         (3) safety rules enforcement (4) test suite passing
+
+try:
+    from model.tanglish_tokenizer import parse_tanglish, detect_intent_with_tokenization
+    TOKENIZER_AVAILABLE = False  # DISABLED until safe
+except ImportError:
+    TOKENIZER_AVAILABLE = False
+    parse_tanglish = None
+    detect_intent_with_tokenization = None
+
 # ── Intent patterns ──────────────────────────────────────────────────────────
 #
 # Each key maps to a list of literal phrases to look for (case-insensitive
@@ -674,6 +691,75 @@ def _tanglish_intent_to_memory_key(intent: TanglishIntent) -> str | None:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
+
+def extract_and_save_multi_facts_tanglish(message: str) -> dict[str, str] | None:
+    """
+    Use word-by-word tokenization to extract and save multiple facts from a single message.
+    
+    This function is called when a message contains multiple personal facts (e.g.
+    greeting + name + location in one sentence).
+    
+    Returns:
+        Dictionary of {memory_key: saved_value} for each fact extracted and saved,
+        or None if no facts were extracted.
+    
+    Example:
+        Input: "vannakam en peru sarandeep naa madurai la irundhu varen"
+        Output: {"user_name": "sarandeep", "user_location": "madurai"}
+    """
+    if not TOKENIZER_AVAILABLE or not parse_tanglish:
+        return None
+    
+    try:
+        tokens, stmt = parse_tanglish(message)
+    except Exception:
+        return None
+    
+    if not stmt.has_facts():
+        return None
+    
+    saved_facts = {}
+    
+    # Save extracted name
+    if stmt.name:
+        from memory_db import save_memory
+        save_memory(
+            "user_name", stmt.name,
+            category="identity", confidence=0.8,
+            source="regex",  # tokenizer is regex-based
+        )
+        saved_facts["user_name"] = stmt.name
+    
+    # Save extracted location/origin
+    if stmt.location:
+        from memory_db import save_memory
+        save_memory(
+            "user_location", stmt.location,
+            category="identity", confidence=0.8,
+            source="regex",
+        )
+        saved_facts["user_location"] = stmt.location
+    
+    # Save education fact if detected
+    if stmt.education:
+        from memory_db import save_memory
+        education_status = None
+        if stmt.verb_tense == "continuous" or "padikuren" in message.lower():
+            education_status = "current"
+        elif stmt.verb_tense == "past" or "padichen" in message.lower():
+            education_status = "past"
+        
+        save_memory(
+            "user_school", stmt.education,
+            category="education", confidence=0.8,
+            source="regex",
+            education_status=education_status,
+        )
+        saved_facts["user_school"] = stmt.education
+    
+    return saved_facts if saved_facts else None
+
 
 def acknowledge_statement(message: str) -> str | None:
     """

@@ -253,6 +253,55 @@ def show_all_memories() -> list[tuple]:
         ).fetchall()
 
 
+def get_memory_fuzzy(key: str, threshold: float = 0.80) -> tuple[str, str, float] | None:
+    """
+    Retrieve a fact from memory using fuzzy matching on the stored key.
+    
+    This allows approximate key matches, useful for synonyms or typos.
+    Uses difflib.SequenceMatcher for similarity scoring.
+    
+    Args:
+        key: The fact key to search for (may be approximate)
+        threshold: Minimum similarity score (0.0–1.0) to accept a match
+    
+    Returns:
+        (value, retrieval_method, confidence_score) if match >= threshold, else None
+    
+    Retrieval methods: 'exact', 'fuzzy', 'similar_key'
+    """
+    from difflib import SequenceMatcher
+    
+    # Try exact match first
+    exact_match = get_memory(key, language="english")
+    if exact_match:
+        return (exact_match, "exact", 1.0)
+    
+    # Fuzzy search through all keys
+    with sqlite3.connect(DB_PATH) as conn:
+        all_rows = conn.execute(
+            "SELECT fact_key, fact_value FROM memories ORDER BY fact_key"
+        ).fetchall()
+    
+    best_match = None
+    best_score = 0.0
+    best_value = None
+    
+    key_lower = key.lower()
+    for stored_key, stored_value in all_rows:
+        stored_key_lower = stored_key.lower()
+        similarity = SequenceMatcher(None, key_lower, stored_key_lower).ratio()
+        
+        if similarity > best_score:
+            best_score = similarity
+            best_match = stored_key
+            best_value = stored_value
+    
+    if best_score >= threshold:
+        return (best_value, "fuzzy", best_score)
+    
+    return None
+
+
 # ── CLI entry point ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
