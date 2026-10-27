@@ -109,7 +109,7 @@ TAMIL_WORDS = {
     "enga": ["enga", "yenga"],  # where
     
     # Affirmatives/negatives
-    "aama": ["aama", "aamam"],  # yes
+    "aama": ["aama", "aamam", "ama"],  # yes
     "illa": ["illa", "illai"],  # no
 }
 

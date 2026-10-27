@@ -100,7 +100,7 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
         "நான் எங்கே வசிக்கிறேன்", "என் ஊர் என்ன",
         # Tanglish
         "naan enga irukken", "naan enga iruken", "naan enga irukkiren",
-        "naan enga vasikiren",
+        "naan enga vasikiren", "entha ooru", "en ooru",
         # English
         "where do i live", "where am i from", "what is my location",
         "where am i based",
@@ -600,7 +600,7 @@ _STATEMENT_PATTERNS: dict[str, list[str]] = {
     ],
     "user_location": [
         "i live in ", "i am from ", "i'm from ", "i am based in ",
-        "naan enga vasikiren", "naan enga irukken",
+        "naan enga vasikiren", "naan enga irukken", "entha ooru", "en ooru",
     ],
     "user_interest": [
         "i like ", "i love ", "i enjoy ", "my hobby is ", "my interest is ",

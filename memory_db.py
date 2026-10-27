@@ -20,10 +20,19 @@ missing columns are added and known category mismatches are corrected.
 """
 
 import sqlite3
+import os
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path("data/processed/memory.db")
+# Use absolute path based on this file's location, not current working directory.
+# If TAMIL_LLM_DB_ROOT environment variable is set (by backend/main.py),
+# use that as the root. This ensures backend and terminal chatbot use same DB.
+_db_root = os.environ.get('TAMIL_LLM_DB_ROOT')
+if _db_root:
+    DB_PATH = Path(_db_root) / "data" / "processed" / "memory.db"
+else:
+    DB_PATH = Path(__file__).parent / "data" / "processed" / "memory.db"
+
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # ── Category back-fill: correct known keys that have wrong category in DB ────
@@ -124,8 +133,9 @@ def save_memory(
 
     Write rules (in priority order):
       1. Manual facts (source='manual') can ONLY be overwritten by manual writes.
-      2. Regex facts can overwrite AI facts.
+      2. Regex/tanglish facts can overwrite AI facts (AI has higher false-positive rate).
       3. AI facts can only overwrite other AI facts if the new confidence is higher.
+      4. Do not downgrade confidence for any source.
     """
     with sqlite3.connect(DB_PATH) as conn:
         existing = conn.execute(
@@ -135,15 +145,29 @@ def save_memory(
 
         if existing:
             ex_conf, ex_src = existing
+            
+            # Rule 1: Manual facts cannot be overwritten by non-manual
             if ex_src == "manual" and source != "manual":
-                return   # non-manual write cannot overwrite manual fact
-            if source == "ai":
+                return
+            
+            # Rule 2: AI facts can be overwritten by regex/tanglish (AI is less reliable)
+            if ex_src == "ai" and source in ("regex", "tanglish"):
+                # Allow regex/tanglish to override AI
+                # This fixes cases where AI misclassifies (e.g., college as location)
+                pass
+            
+            # Rule 3: AI can only overwrite other AI if confidence improves
+            elif source == "ai":
                 if ex_src == "manual":
                     return
                 if ex_src == "regex" and confidence < 1.0:
                     return   # AI cannot overwrite a regex fact
                 if ex_src == "ai" and ex_conf >= confidence:
                     return   # don't downgrade AI confidence
+            
+            # Rule 4: Do not downgrade any fact
+            elif confidence < ex_conf:
+                return
 
         conn.execute(
             """

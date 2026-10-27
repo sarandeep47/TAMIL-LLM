@@ -106,6 +106,44 @@ def _has_tamil_script(text: str) -> bool:
     return any("\u0B80" <= ch <= "\u0BFF" for ch in text)
 
 
+# College/Institution keywords for detection
+_COLLEGE_KEYWORDS = {
+    "college", "university", "institute", "school", "academy",
+    "iit", "nit", "iiit", "cse", "ece", "mech", "civil",
+    "btech", "bca", "bsc", "mtech", "mca", "msc",
+    "engineering", "medical", "law", "arts", "commerce",
+}
+
+
+def _is_college_name(value: str) -> bool:
+    """
+    Detect if a value is likely a college/institution name.
+    
+    Heuristics:
+    - All caps (KLNCE, IIT, etc.)
+    - Contains college keywords
+    - Acronym pattern (2-5 consecutive capital letters)
+    """
+    if not value:
+        return False
+    
+    val_lower = value.lower().strip()
+    
+    # Check for college keywords in value
+    if any(kw in val_lower for kw in _COLLEGE_KEYWORDS):
+        return True
+    
+    # All caps or mostly caps (e.g., KLNCE, IIT, NIT)
+    if len(value) >= 2 and value.isupper():
+        return True
+    
+    # Acronym pattern: 2-5 capital letters (e.g., KLNCE)
+    if re.match(r'^[A-Z]{2,5}$', value):
+        return True
+    
+    return False
+
+
 # ── Personal-statement heuristics ────────────────────────────────────────────
 #
 # Goal: filter OUT questions and unrelated messages BEFORE doing any work.
@@ -442,9 +480,29 @@ _ASCII_REGEXES: list[tuple[str, re.Pattern]] = [
         r"naan\s+([A-Za-z][\w\s&.,\-]{1,60}?)\s+la\s+work\s+pan",
         re.IGNORECASE,
     )),
-    # Location
+    # Location (English)
     ("user_location", re.compile(
         r"i\s+(?:live in|am from|am based in)\s+([A-Za-z][A-Za-z ,\-]{1,40}?)(?:[.!,]|$)",
+        re.IGNORECASE,
+    )),
+    # Location (Tanglish): current residence "naa Madurai la iruken"
+    ("user_location", re.compile(
+        r"naa\s+([A-Za-z][A-Za-z ,\-]{1,40}?)\s+la\s+iruken",
+        re.IGNORECASE,
+    )),
+    # Location (Tanglish): place of origin "naa Madurai la irundhu varen" or "naa Madurai irundhu"
+    ("user_location", re.compile(
+        r"naa\s+([A-Za-z][A-Za-z ,\-]{1,40}?)\s+(?:la\s+)?irundhu\s+(?:varen|irundhu)",
+        re.IGNORECASE,
+    )),
+    # Location (Tanglish): "en ooru Madurai" (my town is Madurai)
+    ("user_location", re.compile(
+        r"en\s+ooru\s+([A-Za-z][A-Za-z ,\-]{1,40}?)(?:\s+[aandi]|[.!,]|$)",
+        re.IGNORECASE,
+    )),
+    # Location (Tanglish): "en vaazhum ooru Madurai" (town where I live)
+    ("user_location", re.compile(
+        r"en\s+(?:vaazhum|padichen)\s+ooru\s+([A-Za-z][A-Za-z ,\-]{1,40}?)(?:[.!,]|$)",
         re.IGNORECASE,
     )),
 ]
@@ -602,13 +660,20 @@ def _extract_by_regex(message: str) -> list[Fact]:
                 value = tanglish_intent.entities['value']
                 # Ensure value is valid
                 if value and len(value) > 1 and value.lower() not in _BAD_VALUES:
-                    facts.append(Fact(
-                        key=tanglish_intent.memory_key,
-                        value=value,
-                        category=KNOWN_KEYS.get(tanglish_intent.memory_key, "other"),
-                        confidence=min(tanglish_intent.confidence, 0.85),  # Slightly lower than regex
-                        source="tanglish"
-                    ))
+                    # CRITICAL: Prevent college names from being classified as locations
+                    # e.g., "KLNCE" should not be saved as user_location
+                    if (tanglish_intent.memory_key == 'user_location' and
+                        _is_college_name(value)):
+                        # Skip: detected college/institution name misclassified as location
+                        pass
+                    else:
+                        facts.append(Fact(
+                            key=tanglish_intent.memory_key,
+                            value=value,
+                            category=KNOWN_KEYS.get(tanglish_intent.memory_key, "other"),
+                            confidence=min(tanglish_intent.confidence, 0.85),  # Slightly lower than regex
+                            source="tanglish"
+                        ))
     
     return [f for f in facts if f.is_valid()]
 
@@ -721,6 +786,11 @@ def _validate(raw_facts: list[dict]) -> list[Fact]:
             conf = 0.75
 
         if key not in KNOWN_KEYS:
+            continue
+
+        # CRITICAL: Prevent college names from being classified as locations
+        if key == 'user_location' and _is_college_name(value):
+            # Skip: Ollama misclassified a college/institution as location
             continue
 
         f = Fact(key=key, value=value, category=KNOWN_KEYS[key],

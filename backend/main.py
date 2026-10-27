@@ -23,9 +23,16 @@ import requests
 from dotenv import load_dotenv
 
 # ── Add parent directory to path so we can import from root chatbot.py ──────
+# This allows importing root-level modules (chatbot.py, memory_db.py, etc.)
 PARENT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(PARENT_DIR))
 
+# ── Ensure root-level modules use canonical paths ──────────────────────────────
+# Set environment variable so memory_db resolves to root DB path, not backend path
+import os as _os
+_os.environ.setdefault('TAMIL_LLM_DB_ROOT', str(PARENT_DIR))
+
+# Now import (memory_db will use PARENT_DIR for path resolution)
 from chatbot import ask_ollama, initialize_chatbot, save_chat
 from memory_db import list_memories, get_memory
 from chat_memory import detect_language_style

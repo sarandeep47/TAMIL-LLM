@@ -48,7 +48,8 @@ from training_review import (
 MODEL      = "llama3.2:3b"
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
-CHAT_DB_PATH = Path("data/processed/chatbot.db")
+# Use absolute path based on this file's location, not current working directory
+CHAT_DB_PATH = Path(__file__).parent / "data" / "processed" / "chatbot.db"
 CHAT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # ── /remember key aliases → (canonical DB key, default Tamil value) ──────────

@@ -20,10 +20,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-DB_PATH = Path("data/processed/chatbot.db")
+# Use absolute path based on this file's location, not current working directory
+DB_PATH = Path(__file__).parent / "data" / "processed" / "chatbot.db"
 
 # Export directory
-EXPORT_DIR = Path("data/exports")
+EXPORT_DIR = Path(__file__).parent / "data" / "exports"
 
 
 # ── Schema bootstrap ─────────────────────────────────────────────────────────
