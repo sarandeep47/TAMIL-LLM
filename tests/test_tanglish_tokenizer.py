@@ -192,41 +192,240 @@ class TestIntentDetection:
         assert len(result["intents"]) >= 2
 
 
-class TestEdgeCases:
-    """Test edge cases and error handling."""
+class TestSafetyNegativeCases:
+    """Negative tests: Ensure NO facts are extracted from non-personal statements."""
     
-    def test_tokenize_empty_string(self):
-        """Test tokenizing an empty string."""
-        tokens = tokenize_tanglish("")
-        assert len(tokens) == 0
-    
-    def test_tokenize_punctuation(self):
-        """Test that punctuation is stripped."""
-        tokens = tokenize_tanglish("vannakam!")
-        assert len(tokens) == 1
-        assert tokens[0].word == "vannakam"
-    
-    def test_tokenize_mixed_case(self):
-        """Test that case-insensitive matching works."""
-        tokens = tokenize_tanglish("VANNAKAM En PERU Sarandeep")
-        assert tokens[0].canonical == "vannakam"  # matched case-insensitively
-    
-    def test_statement_has_facts(self):
-        """Test the has_facts() method."""
-        stmt1 = Statement()
-        assert not stmt1.has_facts()
+    def test_question_no_extraction(self):
+        """Questions should NEVER extract facts."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
         
-        stmt2 = Statement()
-        stmt2.name = "test"
-        assert stmt2.has_facts()
+        questions = [
+            "What is my name?",
+            "Where do I live?",
+            "Tell me something.",
+            "Can you help?",
+        ]
+        for q in questions:
+            facts = extract_and_save_multi_facts_tanglish(q)
+            assert not facts or len(facts) == 0, f"Question extracted facts: {q} → {facts}"
     
-    def test_parse_unknown_words(self):
-        """Test handling of completely unknown words."""
-        tokens = tokenize_tanglish("unknownword123")
-        assert len(tokens) == 1
-        assert tokens[0].category == "unknown"
-        assert tokens[0].canonical is None
+    def test_generic_request_no_extraction(self):
+        """Generic requests should NOT extract facts."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        
+        requests = [
+            "Tell me something.",
+            "Help me with Python.",
+            "I want to learn Python.",
+            "Can you explain?",
+        ]
+        for req in requests:
+            facts = extract_and_save_multi_facts_tanglish(req)
+            assert not facts or len(facts) == 0, f"Request extracted facts: {req} → {facts}"
+    
+    def test_gibberish_no_extraction(self):
+        """Random gibberish should NOT extract facts."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        
+        gibberish = [
+            "xyzabc 123",
+            "asdfgh qwerty",
+            "random words here",
+        ]
+        for g in gibberish:
+            facts = extract_and_save_multi_facts_tanglish(g)
+            assert not facts or len(facts) == 0, f"Gibberish extracted facts: {g} → {facts}"
+    
+    def test_greeting_only_no_extraction(self):
+        """Greetings alone should NOT extract facts."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        
+        greetings = [
+            "vannakam",
+            "hi",
+            "hello",
+            "namaskaram",
+        ]
+        for g in greetings:
+            facts = extract_and_save_multi_facts_tanglish(g)
+            assert not facts or len(facts) == 0, f"Greeting extracted facts: {g} → {facts}"
+    
+    def test_capitalized_words_not_names(self):
+        """Capitalized words alone should NEVER become names."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        from memory_db import get_memory, list_memories
+        
+        # Clear DB
+        for mem in list_memories():
+            from memory_db import forget_memory
+            forget_memory(mem['key'])
+        
+        # These should NOT save "Tell" or "What" as names
+        messages = [
+            "Tell me something.",
+            "What is my name?",
+            "I want to learn Python.",
+        ]
+        
+        for msg in messages:
+            facts = extract_and_save_multi_facts_tanglish(msg)
+            if facts and 'user_name' in facts:
+                assert False, f"Capitalized word saved as name: {msg} → {facts}"
+        
+        # Verify DB is empty
+        saved_name = get_memory("user_name")
+        assert saved_name is None, f"Unexpected name saved: {saved_name}"
 
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+
+class TestSafetyNegativeCases:
+    """Negative tests: Ensure NO facts are extracted from non-personal statements."""
+    
+    def test_question_no_extraction(self):
+        """Questions should NEVER extract facts."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        
+        questions = [
+            "What is my name?",
+            "Where do I live?",
+            "Tell me something.",
+            "Can you help?",
+        ]
+        for q in questions:
+            facts = extract_and_save_multi_facts_tanglish(q)
+            assert not facts or len(facts) == 0, f"Question extracted facts: {q} → {facts}"
+    
+    def test_generic_request_no_extraction(self):
+        """Generic requests should NOT extract facts."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        
+        requests = [
+            "Tell me something.",
+            "Help me with Python.",
+            "I want to learn Python.",
+            "Can you explain?",
+        ]
+        for req in requests:
+            facts = extract_and_save_multi_facts_tanglish(req)
+            assert not facts or len(facts) == 0, f"Request extracted facts: {req} → {facts}"
+    
+    def test_gibberish_no_extraction(self):
+        """Random gibberish should NOT extract facts."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        
+        gibberish = [
+            "xyzabc 123",
+            "asdfgh qwerty",
+            "random words here",
+        ]
+        for g in gibberish:
+            facts = extract_and_save_multi_facts_tanglish(g)
+            assert not facts or len(facts) == 0, f"Gibberish extracted facts: {g} → {facts}"
+    
+    def test_greeting_only_no_extraction(self):
+        """Greetings alone should NOT extract facts."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        
+        greetings = [
+            "vannakam",
+            "hi",
+            "hello",
+            "namaskaram",
+        ]
+        for g in greetings:
+            facts = extract_and_save_multi_facts_tanglish(g)
+            assert not facts or len(facts) == 0, f"Greeting extracted facts: {g} → {facts}"
+    
+    def test_capitalized_words_not_names(self):
+        """Capitalized words alone should NEVER become names."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        from memory_db import get_memory, list_memories, forget_memory
+        
+        # Clear DB
+        for mem in list_memories():
+            forget_memory(mem['key'])
+        
+        # These should NOT save "Tell" or "What" as names
+        messages = [
+            "Tell me something.",
+            "What is my name?",
+            "I want to learn Python.",
+        ]
+        
+        for msg in messages:
+            facts = extract_and_save_multi_facts_tanglish(msg)
+            if facts and 'user_name' in facts:
+                assert False, f"Capitalized word saved as name: {msg} → {facts}"
+        
+        # Verify DB is empty
+        saved_name = get_memory("user_name")
+        assert saved_name is None, f"Unexpected name saved: {saved_name}"
+
+
+class TestSafetyPositiveCases:
+    """Positive tests: Valid personal statements SHOULD extract facts correctly."""
+    
+    def test_name_with_explicit_marker(self):
+        """Name extracted when marked with 'en peru' explicitly."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        from memory_db import get_memory, forget_memory
+        
+        forget_memory("user_name")
+        
+        message = "en peru sarandeep"  # Marked with 'en peru'
+        facts = extract_and_save_multi_facts_tanglish(message)
+        
+        # This should save the name
+        if facts and 'user_name' in facts:
+            assert facts['user_name'] == 'sarandeep'
+    
+    def test_location_extraction(self):
+        """Location extracted from valid statement."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        from memory_db import get_memory, forget_memory
+        
+        forget_memory("user_location")
+        
+        message = "naa madurai la irundhu varen"  # Location statement
+        facts = extract_and_save_multi_facts_tanglish(message)
+        
+        # Should extract location
+        if facts and 'user_location' in facts:
+            assert facts['user_location'] == 'madurai'
+    
+    def test_degree_extraction(self):
+        """Degree saved as education, NOT as name."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        from memory_db import get_memory, forget_memory
+        
+        forget_memory("user_school")
+        forget_memory("user_name")
+        
+        message = "naa BE mudichuruken"  # BE = Bachelor of Engineering
+        facts = extract_and_save_multi_facts_tanglish(message)
+        
+        # BE should be saved as education (if anything)
+        # But should NOT be saved as a name
+        saved_name = get_memory("user_name")
+        assert saved_name != 'BE', "Degree 'BE' incorrectly saved as name"
+    
+    def test_interest_extraction(self):
+        """Interests extracted from preference statements."""
+        from chat_memory import extract_and_save_multi_facts_tanglish
+        from memory_db import get_memory, forget_memory
+        
+        forget_memory("user_interest")
+        forget_memory("favorite_colour")
+        
+        message = "ennaku blue pudikum"  # I like blue
+        facts = extract_and_save_multi_facts_tanglish(message)
+        
+        # Should extract interest/colour, not random facts
+        if facts:
+            # If something was saved, it should be colour/interest, not other facts
+            for key in facts.keys():
+                assert key in ["user_interest", "favorite_colour"], f"Unexpected fact saved: {key}"

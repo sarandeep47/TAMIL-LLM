@@ -697,18 +697,39 @@ def extract_and_save_multi_facts_tanglish(message: str) -> dict[str, str] | None
     """
     Use word-by-word tokenization to extract and save multiple facts from a single message.
     
-    This function is called when a message contains multiple personal facts (e.g.
-    greeting + name + location in one sentence).
+    SAFETY REQUIREMENTS:
+    1. Message must NOT be a question (end with ?)
+    2. Message must NOT be a greeting-only (just "vannakam")
+    3. Message must match personal-fact statement patterns
+    4. NO facts extracted from: commands, gibberish, generic requests
     
     Returns:
         Dictionary of {memory_key: saved_value} for each fact extracted and saved,
-        or None if no facts were extracted.
-    
-    Example:
-        Input: "vannakam en peru sarandeep naa madurai la irundhu varen"
-        Output: {"user_name": "sarandeep", "user_location": "madurai"}
+        or None if no facts were extracted or message invalid.
     """
     if not TOKENIZER_AVAILABLE or not parse_tanglish:
+        return None
+    
+    # SAFETY: Pre-validation before tokenization
+    # 1. Reject questions (end with ?)
+    if message.strip().endswith('?'):
+        return None
+    
+    # 2. Reject slash commands
+    if message.strip().startswith('/'):
+        return None
+    
+    # 3. Reject very short messages (likely greetings only)
+    if len(message.split()) <= 1:
+        return None
+    
+    # 4. Check if it looks like a personal fact statement
+    from fact_extractor import _looks_like_personal_statement
+    if not _looks_like_personal_statement(message):
+        return None
+    
+    # SAFETY: Also check personal history guard (should not be saving personal history questions)
+    if is_personal_history_question(message):
         return None
     
     try:
@@ -721,13 +742,13 @@ def extract_and_save_multi_facts_tanglish(message: str) -> dict[str, str] | None
     
     saved_facts = {}
     
-    # Save extracted name
+    # Save extracted name (ONLY if marked with "en peru" or "en peyar", never just capitalized)
     if stmt.name:
         from memory_db import save_memory
         save_memory(
             "user_name", stmt.name,
-            category="identity", confidence=0.8,
-            source="regex",  # tokenizer is regex-based
+            category="identity", confidence=0.85,
+            source="regex",
         )
         saved_facts["user_name"] = stmt.name
     
@@ -736,7 +757,7 @@ def extract_and_save_multi_facts_tanglish(message: str) -> dict[str, str] | None
         from memory_db import save_memory
         save_memory(
             "user_location", stmt.location,
-            category="identity", confidence=0.8,
+            category="identity", confidence=0.85,
             source="regex",
         )
         saved_facts["user_location"] = stmt.location
@@ -752,7 +773,7 @@ def extract_and_save_multi_facts_tanglish(message: str) -> dict[str, str] | None
         
         save_memory(
             "user_school", stmt.education,
-            category="education", confidence=0.8,
+            category="education", confidence=0.85,
             source="regex",
             education_status=education_status,
         )

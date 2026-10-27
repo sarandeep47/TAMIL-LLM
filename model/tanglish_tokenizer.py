@@ -254,10 +254,11 @@ def extract_statements_from_tokens(tokens: List[Token]) -> Statement:
             i += 1
             continue
         
-        # Unknown words (potential names if capitalized or proper noun)
+        # Unknown words: NEVER treat as names based on capitalization alone.
+        # Names must be explicitly marked with "en peru" or "en peyar" prefix.
         if token.category == "unknown":
-            if token.is_proper_noun and not stmt.name:
-                stmt.name = token.word
+            # Skip unknown words completely unless explicitly marked as names
+            # (which would have been handled above in the "en"/"peru" section)
             i += 1
             continue
         
