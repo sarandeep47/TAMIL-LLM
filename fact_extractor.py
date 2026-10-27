@@ -41,6 +41,7 @@ from typing import Any
 import requests
 
 from memory_db import get_memory, save_memory
+from tanglish_understanding import understand_tanglish
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL      = "llama3.2:3b"
@@ -60,6 +61,7 @@ KNOWN_KEYS: dict[str, str] = {
     "user_school_past":         "education",   # padichen / studied at (past)
     "user_school_current":      "education",   # padikuren / am studying (present)
     "user_field_of_study":      "education",
+    "user_degree":              "education",   # BE, BTech, MSc, etc.
     "user_learning":            "learning",
     "user_interest":            "interest",
     "user_skill":               "skill",
@@ -178,6 +180,9 @@ _STMT_PATTERNS: list[re.Pattern] = [
         r"\b(?:naa|naan)\s+[A-Za-z].{1,60}?\s+padikuren\b",
         r"\bi(?:'m| am) studying at\b",
         r"\bi study at\b",
+        # Degree (must have explicit keywords to avoid false positives with field of study)
+        r"\bi have\s+(?:a\s+)?[A-Z]{2,8}\s+(?:degree|qualification)\b",
+        r"\bi(?:'m| am) (?:doing|pursuing)\s+(?:my\s+)?[A-Z]{2,8}\s+degree\b",
     ]
 ]
 
@@ -196,6 +201,8 @@ def _looks_like_personal_statement(message: str) -> bool:
     """
     Returns True only when the message clearly contains a personal fact
     statement (not a question, not a command, not too short).
+    
+    EXTRACTION GATE: Blocks questions and recalls before they reach Ollama.
     """
     s = message.strip()
     if len(s) < _MIN_LEN:
@@ -203,6 +210,7 @@ def _looks_like_personal_statement(message: str) -> bool:
     if s.startswith("/"):
         return False
 
+    # Handle Tamil script messages first
     if _has_tamil_script(s):
         # A trailing '?' always means it's a question — skip extraction
         if s.endswith("?"):
@@ -210,11 +218,33 @@ def _looks_like_personal_statement(message: str) -> bool:
         # Also skip on known Tamil question-ending words
         if any(q in s for q in _TAMIL_QUESTION_SUBSTRS):
             return False
+        # Tamil statements that match patterns should be extracted
         return any(sub in s for sub in _TAMIL_STMT_SUBSTRS)
 
+    # For non-Tamil (Tanglish/English), first check if it's a QUESTION or RECALL
+    # These should NOT be extracted. Only statements get facts extracted.
+    tanglish_intent = understand_tanglish(s)
+    
+    # EXTRACTION GATE: Block questions, recalls, greetings
+    if tanglish_intent.sentence_type in ('question', 'recall', 'greeting'):
+        return False
+    
+    # Also check for explicit question markers
     if any(p.search(s) for p in _QUESTION_PATTERNS):
         return False
-    return any(p.search(s) for p in _STMT_PATTERNS)
+    
+    # Try pattern matching for statement detection
+    if any(p.search(s) for p in _STMT_PATTERNS):
+        return True
+    
+    # Fallback: use tanglish_understanding to classify
+    # This catches patterns like "naa Madurai la iruken" that don't match regex patterns
+    if (tanglish_intent.sentence_type == 'statement' and 
+        tanglish_intent.is_personal_fact() and
+        tanglish_intent.confidence >= 0.7):
+        return True
+    
+    return False
 
 
 # ── Known Tamil name → English transliteration ───────────────────────────────
@@ -387,6 +417,21 @@ _ASCII_REGEXES: list[tuple[str, re.Pattern]] = [
         r"naan\s+([A-Za-z][\w+#.-]{0,30})\s+padikiren\b",
         re.IGNORECASE,
     )),
+    # Degree (English) — must have explicit keywords like "degree", "have", "doing", etc.
+    ("user_degree", re.compile(
+        r"i\s+(?:have|got|completed)\s+(?:a\s+)?(?:my\s+)?([A-Z]{2,10})\s+(?:degree|qualification|degreee?)",
+        re.IGNORECASE,
+    )),
+    # Degree (English) — "I'm doing my BE"
+    ("user_degree", re.compile(
+        r"i(?:'m| am)\s+(?:doing|pursuing|working on)\s+(?:my\s+)?([A-Z]{2,10})\s+(?:degree)?",
+        re.IGNORECASE,
+    )),
+    # Degree (Tanglish) — explicit degree keywords only, NOT "padichen" (which is for field-of-study)
+    ("user_degree", re.compile(
+        r"(?:naa|na|naan)\s+([A-Z]{2,10})\s+(?:degree|qualification)\b",
+        re.IGNORECASE,
+    )),
     # Workplace (English)
     ("user_workplace", re.compile(
         r"i\s+(?:work|am working)\s+(?:at|for|in)\s+([A-Za-z][\w\s&.,\-]{1,60}?)(?:\s*[.!,]|$)",
@@ -533,6 +578,38 @@ def _extract_by_regex(message: str) -> list[Fact]:
             
             extracted_keys.add(canon_key)
 
+    # If regex found nothing but the message looks like a personal fact statement,
+    # try tanglish_understanding as a final fallback
+    if not facts:
+        tanglish_intent = understand_tanglish(message)
+        
+        # Only extract if it's a statement about a personal fact with high confidence
+        if (tanglish_intent.sentence_type == 'statement' and
+            tanglish_intent.is_personal_fact() and
+            tanglish_intent.confidence >= 0.7 and
+            tanglish_intent.memory_key and
+            tanglish_intent.entities.get('value')):
+            
+            # Additional gate: don't extract field_of_study without college context
+            # "naa cse padichen" is ambiguous, require college keyword
+            if (tanglish_intent.memory_key == 'user_field_of_study' and
+                'college' not in message.lower() and
+                'school' not in message.lower() and
+                'university' not in message.lower()):
+                # Skip field_of_study extraction without college context
+                pass
+            else:
+                value = tanglish_intent.entities['value']
+                # Ensure value is valid
+                if value and len(value) > 1 and value.lower() not in _BAD_VALUES:
+                    facts.append(Fact(
+                        key=tanglish_intent.memory_key,
+                        value=value,
+                        category=KNOWN_KEYS.get(tanglish_intent.memory_key, "other"),
+                        confidence=min(tanglish_intent.confidence, 0.85),  # Slightly lower than regex
+                        source="tanglish"
+                    ))
+    
     return [f for f in facts if f.is_valid()]
 
 

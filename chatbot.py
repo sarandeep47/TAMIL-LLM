@@ -34,7 +34,7 @@ from memory_db import (
     forget_memory,
     list_memories,
 )
-from chat_memory import answer_question, learn_fact, detect_language_style, acknowledge_statement
+from chat_memory import answer_question, learn_fact, detect_language_style, acknowledge_statement, handle_greeting
 from fact_extractor import extract_facts
 from training_review import (
     initialize_training_db,
@@ -210,9 +210,10 @@ def _build_system_message(memory_ctx: str | None) -> str:
 
 def ask_ollama(user_message: str) -> str:
     # 1. Deterministic short-circuits (no Ollama needed)
-    #    Priority: colour-learn → fact question → statement acknowledgment
+    #    Priority: greeting → colour-learn → fact question → statement acknowledgment
     memory_answer = (
-        learn_fact(user_message)
+        handle_greeting(user_message)
+        or learn_fact(user_message)
         or answer_question(user_message)
         or acknowledge_statement(user_message)
     )

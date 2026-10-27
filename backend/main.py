@@ -29,6 +29,7 @@ sys.path.insert(0, str(PARENT_DIR))
 from chatbot import ask_ollama, initialize_chatbot, save_chat
 from memory_db import list_memories, get_memory
 from chat_memory import detect_language_style
+from fact_extractor import extract_facts
 
 # ── Load environment variables ────────────────────────────────────────────────
 load_dotenv(Path(__file__).parent / ".env")
@@ -163,10 +164,13 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="Message too long (max 5000 chars)")
 
     try:
+        # Extract and save facts FIRST (before Ollama)
+        # This ensures deterministic memory operations happen before LLM generation
+        extracted = extract_facts(message)
+        
         # Get response from existing chatbot logic
         # This handles:
-        # - Fact extraction and saving (via extract_facts)
-        # - Memory lookup and acknowledgments
+        # - Memory lookup and acknowledgments  
         # - Ollama LLM call if needed
         # - Language style preservation
         reply = ask_ollama(message)
@@ -178,10 +182,14 @@ async def chat(request: ChatRequest):
         # Detect language style for frontend
         language = detect_language_style(message)
 
-        # Get any facts that were saved (for UI feedback)
-        # Note: we don't track which facts were newly extracted here,
-        # so we return empty list. Frontend can call /api/memories if needed.
-        extracted_facts = []
+        # Return extracted facts for UI feedback
+        extracted_facts = [
+            {
+                "key": f.key,
+                "value": f.value,
+            }
+            for f in extracted
+        ]
 
         return ChatResponse(
             reply=reply,

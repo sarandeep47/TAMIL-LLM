@@ -42,6 +42,7 @@ from __future__ import annotations
 import re
 
 from memory_db import initialize_database, get_memory, get_education_status
+from tanglish_understanding import understand_tanglish, TanglishIntent
 
 initialize_database()
 
@@ -64,6 +65,16 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
         # English
         "what is my name", "what's my name", "whats my name",
         "tell me my name",
+    ],
+
+    "user_degree": [
+        # English — specific degree questions (check before user_school to avoid conflicts)
+        "what degree do i have", "what is my degree",
+        "do i have a degree", "which degree have i completed",
+        "have i completed my degree", "what degree did i complete",
+        "what is my qualification",
+        # Tanglish
+        "en degree enna", "en degree ella", "naa enna degree",
     ],
 
     "user_location": [
@@ -148,8 +159,7 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
         "which college degree", "college degree", "my degree",
         "did i graduate", "where did i graduate", "where did i do my",
         "my graduation", "my qualification",
-        "what degree do i have", "do i have a degree",
-        "have i done my degree", "have i completed my degree",
+        "where am i going to college",
     ],
 
     "user_field_of_study": [
@@ -382,6 +392,11 @@ def _build_response(intent: str, value: str, style: str, question: str = "") -> 
             "tanglish": f"Unga field of study {value}.",
             "english":  f"Your field of study is {value}.",
         },
+        "user_degree": {
+            "tamil":    f"உங்கள் பட்டம் {value}.",
+            "tanglish": f"Unga degree {value}.",
+            "english":  f"Your degree is {value}.",
+        },
         "user_interest": {
             "tamil":    f"உங்களுக்கு {value} பிடிக்கும்.",
             "tanglish": f"Ungalukku {value} pudikkum.",
@@ -459,6 +474,11 @@ _ACK_TEMPLATES: dict[str, dict[str, str]] = {
         "tamil":    "சரி! உங்கள் படிப்பு {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
         "tanglish": "Seri! Unga field of study {value} nu save panniten.",
         "english":  "Got it! I'll remember your field of study is {value}.",
+    },
+    "user_degree": {
+        "tamil":    "சரி! உங்கள் பட்டம் {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Unga degree {value} nu save panniten.",
+        "english":  "Got it! I'll remember your degree is {value}.",
     },
     "user_goal": {
         "tamil":    "சரி! உங்கள் இலக்கு {value} என்று நினைவில் வைத்துக்கொள்கிறேன்.",
@@ -593,6 +613,18 @@ def _detect_statement_intent(message: str) -> str | None:
             else:
                 if phrase in msg_lower:
                     return key
+    
+    # Fallback: try tanglish_understanding
+    tanglish_intent = understand_tanglish(message)
+    
+    # Only process if it's clearly a save operation (statement)
+    if tanglish_intent.operation == 'save' and tanglish_intent.is_personal_fact():
+        memory_key = _tanglish_intent_to_memory_key(tanglish_intent)
+        if memory_key:
+            # High confidence only
+            if tanglish_intent.confidence >= 0.7:
+                return memory_key
+    
     return None
 
 
@@ -627,6 +659,20 @@ def _infer_school_tense_from_message(message: str) -> str:
     return "user_school"
 
 
+# ── Tanglish intent integration ───────────────────────────────────────────────
+
+def _tanglish_intent_to_memory_key(intent: TanglishIntent) -> str | None:
+    """
+    Convert a TanglishIntent to a canonical memory key if applicable.
+    Returns None if the intent is not a personal-fact operation.
+    """
+    if not intent.is_personal_fact():
+        return None
+    
+    # Direct mapping from TanglishIntent.memory_key (already canonical)
+    return intent.memory_key
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def acknowledge_statement(message: str) -> str | None:
@@ -645,6 +691,19 @@ def acknowledge_statement(message: str) -> str | None:
     'previously studied' acknowledgment.
     """
     intent = _detect_statement_intent(message)
+    
+    # If no pattern match, try tanglish_understanding as a fallback
+    if intent is None:
+        tanglish_intent = understand_tanglish(message)
+        
+        # Only process if it's clearly a save/acknowledge operation
+        if tanglish_intent.operation in ('save', 'acknowledge') and tanglish_intent.is_personal_fact():
+            memory_key = _tanglish_intent_to_memory_key(tanglish_intent)
+            if memory_key:
+                # High confidence only
+                if tanglish_intent.confidence >= 0.7:
+                    intent = memory_key
+
     if intent is None:
         return None
 
@@ -692,6 +751,21 @@ def answer_question(question: str) -> str | None:
     intent = detect_intent(question)
     style  = detect_language_style(question)
 
+    # If no pattern match, try tanglish_understanding as a fallback
+    if intent is None:
+        tanglish_intent = understand_tanglish(question)
+        
+        # Only process if it's clearly a retrieval operation (question/recall)
+        if tanglish_intent.operation in ('retrieve', 'acknowledge') and tanglish_intent.is_personal_fact():
+            memory_key = _tanglish_intent_to_memory_key(tanglish_intent)
+            if memory_key:
+                # Treat as if we found a pattern match
+                intent = memory_key
+                # Confidence check: only use high-confidence intents
+                if tanglish_intent.confidence < 0.7:
+                    # Low confidence: continue with safety guard below instead
+                    intent = None
+
     if intent is None:
         # If this looks like a statement (not a question), don't handle it here
         # — let acknowledge_statement() process it instead
@@ -733,6 +807,31 @@ def is_personal_history_question(text: str) -> bool:
     Used by chatbot.py as a second-tier safety net after detect_intent().
     """
     return any(p.search(text) for p in _PERSONAL_HISTORY_GUARD_PATTERNS)
+
+
+def handle_greeting(message: str) -> str | None:
+    """
+    Recognize greetings and return a simple Tamil greeting response.
+    
+    Returns a simple greeting if detected, None otherwise.
+    """
+    from tanglish_understanding import understand_tanglish
+    
+    tanglish_intent = understand_tanglish(message)
+    
+    # Check if it's classified as a greeting
+    if tanglish_intent.sentence_type != 'greeting':
+        return None
+    
+    # Return a simple Tamil greeting
+    style = detect_language_style(message)
+    
+    if style == 'tamil':
+        return "வணக்கம்!"
+    elif style == 'tanglish':
+        return "Vanakkam!"
+    else:
+        return "Hello!"
 
 
 def learn_fact(message: str) -> str | None:

@@ -73,8 +73,9 @@ _SPELLING_VARIANTS = {
     # Quotative particle
     'nu': {'nu', 'nnu', 'n'},
     
-    # Locative postposition
-    'la': {'la', 'ile', 'il', 'ille', 'le', 'le'},
+    # Locative postposition (keep variants separate)
+    'la': {'la', 'le'},
+    'ile': {'ile', 'il', 'ille'},
     
     # Say/tell verbs
     'sonnen': {'sonnen', 'sonna', 'sonnaen'},
@@ -121,24 +122,47 @@ _POSTPOSITIONS = {'la', 'ile', 'il'}
 def _detect_sentence_type(tokens: list[str], original: str) -> str:
     """
     Classify sentence as 'statement', 'question', 'recall', 'greeting', or 'unclear'.
+    
+    Priority: recall patterns > explicit ? mark > greetings > statements > unclear
     """
-    # Check for question markers
-    if '?' in original or any(qw in tokens for qw in _QUESTION_WORDS):
-        # Exclude recall pattern: "... nu sonnen" (I said X)
-        if 'nu' in tokens and 'sonnen' in tokens:
+    # Check for recall pattern: 'nu sonnen' (I said...) or just 'sollu' at end (tell me / remind me)
+    if 'nu' in tokens and 'sonnen' in tokens:
+        return 'recall'
+    if 'sollu' in tokens:
+        # If also has question word, could be "tell me what..." (recall) or just imperative
+        # Heuristic: if has verb AND sollu, it's more likely recall
+        if any(v in tokens for v in _STUDY_VERBS_PAST | _STUDY_VERBS_PRESENT | _LOCATION_VERBS):
             return 'recall'
+        # Otherwise, it's an imperative (tell me / show me), treat as chat
+        return 'chat'
+    
+    # Check for explicit question mark (highest priority for questions)
+    if '?' in original:
         return 'question'
     
-    # Check for recall pattern: "nu sonnen" or "sollu" (remind me / I said / tell me)
-    if ('nu' in tokens and 'sonnen' in tokens) or 'sollu' in tokens:
-        return 'recall'
+    # Check for question words
+    if any(qw in tokens for qw in _QUESTION_WORDS):
+        return 'question'
     
-    # Check for greetings
-    if any(token in {'vanakkam', 'namaskaram', 'hello', 'hi'} for token in tokens):
+    # Check for greetings (recognize Tamil spelling variants)
+    # Common variants: vanakkam, vannakam, vannakkam (alternative spellings)
+    # Also include Tamil script version
+    greeting_variants = {
+        'vanakkam', 'vannakam', 'vannakkam', 
+        'namaskaram', 'hello', 'hi',
+        'வணக்கம்'  # Tamil script
+    }
+    if any(token in greeting_variants for token in tokens):
         return 'greeting'
     
-    # Check for declarative statement patterns
+    # Check for declarative statement patterns (includes naming with peru)
     if any(v in tokens for v in _STUDY_VERBS_PAST | _STUDY_VERBS_PRESENT | _LOCATION_VERBS):
+        return 'statement'
+    if 'peru' in tokens or 'peyar' in tokens:
+        return 'statement'
+    
+    # Check for degree/qualification statements
+    if 'degree' in tokens or 'qualification' in tokens:
         return 'statement'
     
     # Fallback: if no clear markers, assume unclear
@@ -161,10 +185,24 @@ def _infer_tense(tokens: list[str]) -> str:
 
 def _extract_topic_and_key(tokens: list[str], sentence_type: str, tense: str) -> tuple[str | None, str | None]:
     """
-    Identify the topic (name, location, school, field_of_study, etc.) and memory key.
+    Identify the topic (name, location, school, field_of_study, degree, etc.) and memory key.
     
     Returns (topic, canonical_memory_key).
     """
+    # Name topics (highest priority)
+    if 'peru' in tokens or 'peyar' in tokens:
+        return ('name', 'user_name')
+    
+    # Degree topics (high priority to distinguish from other education facts)
+    # "I have a BE degree", "My degree is MSc", etc.
+    if 'degree' in tokens or 'qualification' in tokens:
+        # Check if there's a degree abbreviation (BE, MSc, BTech, MBA, etc.)
+        # Abbreviations are typically 2-5 uppercase letters
+        for token in tokens:
+            if token.isupper() and 2 <= len(token) <= 5 and token not in {'I', 'A'}:
+                return ('degree', 'user_degree')
+        return ('degree', 'user_degree')
+    
     # Education topics (school, field)
     if 'padichen' in tokens or 'padikuren' in tokens or 'padikittu' in tokens:
         # Distinguish: school vs. field of study based on context
@@ -180,12 +218,8 @@ def _extract_topic_and_key(tokens: list[str], sentence_type: str, tense: str) ->
             return ('field_of_study', 'user_field_of_study')
     
     # Location topics
-    if any(v in tokens for v in _LOCATION_VERBS) or 'la' in tokens or 'il' in tokens:
+    if any(v in tokens for v in _LOCATION_VERBS) or 'la' in tokens or 'il' in tokens or 'ile' in tokens:
         return ('location', 'user_location')
-    
-    # Name topics
-    if 'peru' in tokens or 'peyar' in tokens or 'peru' in tokens:
-        return ('name', 'user_name')
     
     # Learning topics
     if 'padikiren' in tokens or 'kathukkiren' in tokens:
@@ -202,7 +236,7 @@ def _extract_entity_value(tokens: list[str], original: str, topic: str | None) -
     """
     Extract the entity value (e.g., 'CSE', 'Madurai', 'Sarandeep').
     
-    Heuristic: look for capitalized words, known place names, or word after "la"/"il".
+    Heuristic: look for capitalized words, known place names, or word before "la"/"il".
     """
     entities = {}
     
@@ -212,10 +246,10 @@ def _extract_entity_value(tokens: list[str], original: str, topic: str | None) -
     
     # Extract value based on topic
     if topic == 'location':
-        # Look for capitalized word or word after "la"/"il"
+        # Look for word BEFORE postposition (e.g., 'madurai' before 'la')
         for i, token in enumerate(tokens):
-            if token in _POSTPOSITIONS and i + 1 < len(tokens):
-                entities['value'] = tokens[i + 1].capitalize()
+            if token in _POSTPOSITIONS and i > 0:
+                entities['value'] = tokens[i - 1].capitalize()
                 break
         # Fallback: look for capitalized words in original
         if 'value' not in entities:
@@ -265,9 +299,10 @@ def _detect_language_style(text: str) -> str:
     """Detect if input is Tamil script, Tanglish, or English."""
     if any('\u0B80' <= ch <= '\u0BFF' for ch in text):
         return 'tamil'
-    # Check for Tanglish markers
+    # Check for Tanglish markers (multiple Tanglish tokens, not just one)
     tokens = set(t.lower() for t in _tokenize_tanglish(text))
-    if tokens & _SUBJECTS | _QUESTION_WORDS | _STUDY_VERBS_PAST | _STUDY_VERBS_PRESENT:
+    tanglish_tokens = tokens & (_SUBJECTS | _QUESTION_WORDS | _STUDY_VERBS_PAST | _STUDY_VERBS_PRESENT | _LOCATION_VERBS)
+    if len(tanglish_tokens) >= 2:  # At least 2 Tanglish tokens
         return 'tanglish'
     return 'english'
 

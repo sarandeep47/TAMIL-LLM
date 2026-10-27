@@ -443,9 +443,9 @@ class TestPersonalHistorySafetyGuard:
         import memory_db, chatbot
         memory_db.save_memory("user_school", "KLNCE",
                               category="education", source="manual")
-        # "what degree do i have" matches intent "user_school" directly
+        # "which college did i graduate from" is routed to user_school, not user_degree
         with patch("chatbot.requests.post") as mock_post:
-            result = chatbot.ask_ollama("what degree do i have")
+            result = chatbot.ask_ollama("which college did i graduate from")
         mock_post.assert_not_called()
         assert "KLNCE" in result
 
