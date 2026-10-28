@@ -35,6 +35,9 @@ _os.environ.setdefault('TAMIL_LLM_DB_ROOT', str(PARENT_DIR))
 # Now import (memory_db will use PARENT_DIR for path resolution)
 from chatbot import ask_ollama, initialize_chatbot, save_chat
 from memory_db import list_memories, get_memory
+from memory_db import DB_PATH
+
+print(f"[DIAGNOSTIC] Active memory database: {DB_PATH.resolve()}")
 from chat_memory import detect_language_style
 from fact_extractor import extract_facts
 

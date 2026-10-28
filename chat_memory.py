@@ -6,7 +6,7 @@ chatbot.py imports from here and does NOT duplicate pattern logic.
 
 Supported fact keys
 -------------------
-user_name, user_location, user_workplace, user_job_title,
+user_name, user_location, user_origin, user_workplace, user_job_title,
 user_learning, user_interest, user_skill, user_goal,
 user_language_preference, user_response_style, favorite_colour,
 user_school (with education_status: 'current' | 'past' | None)
@@ -94,19 +94,51 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
         "en degree enna", "en degree ella", "naa enna degree",
     ],
 
-    "user_location": [
+      "user_location": [
         # Tamil script
-        "நான் எங்கே இருக்கிறேன்", "நான் எங்கு இருக்கிறேன்",
-        "நான் எங்கே வசிக்கிறேன்", "என் ஊர் என்ன",
-        # Tanglish
-        "naan enga irukken", "naan enga iruken", "naan enga irukkiren",
-        "naa enga irukken", "naa enga iruken", "naa enga irukkiren",  # lowercase naa
-        "enga irukken", "enga iruken",  # bare "where are you"
-        "naan enga vasikiren", "naa enga vasikiren",
-        "entha ooru", "en ooru", "enga ooru",
-        # English
-        "where do i live", "where am i from", "what is my location",
+        "நான் எங்கே இருக்கிறேன்",
+        "நான் எங்கு இருக்கிறேன்",
+        "நான் எங்கே வசிக்கிறேன்",
+        "என் ஊர் என்ன",
+
+        # Tanglish: residence
+        "naan enga irukken",
+        "naan enga iruken",
+        "naan enga irukkiren",
+        "naa enga irukken",
+        "naa enga iruken",
+        "naa enga irukkiren",
+        "enga irukken",
+        "enga iruken",
+        "naan enga vasikiren",
+        "naa enga vasikiren",
+        "entha ooru",
+        "en ooru",
+        "enga ooru",
+
+        # English: residence
+        "where do i live",
+        "what is my location",
         "where am i based",
+    ],
+
+    "user_origin": [
+        # Tanglish: origin
+        "naa enga irundhu varen",
+        "naan enga irundhu varen",
+        "naa enga irunthu varen",
+        "naan enga irunthu varen",
+        "naa entha oorula irundhu varen",
+        "naan entha oorula irundhu varen",
+        "naa entha oorula irunthu varen",
+        "naan entha oorula irunthu varen",
+        "enga irundhu varen",
+        "enga irunthu varen",
+
+        # English: origin
+        "where do i come from",
+        "where am i originally from",
+        "where am i from",
     ],
 
     "user_workplace": [
@@ -395,6 +427,11 @@ def _build_response(intent: str, value: str, style: str, question: str = "") -> 
             "tanglish": f"Neenga {value}-la vasikkireenga.",
             "english":  f"You live in {value}.",
         },
+        "user_origin": {
+            "tamil":    f"நீங்கள் {value}-லிருந்து வருகிறீர்கள்.",
+            "tanglish": f"Neenga {value}-la irundhu vareenga.",
+            "english":  f"You are originally from {value}.",
+        },
         "user_workplace": {
             "tamil":    f"நீங்கள் {value}-இல் வேலை செய்கிறீர்கள்.",
             "tanglish": f"Neenga {value}-la velai seykireengga.",
@@ -475,7 +512,12 @@ _ACK_TEMPLATES: dict[str, dict[str, str]] = {
     "user_location": {
         "tamil":    "சரி! நீங்கள் {value} பகுதியில் வசிக்கிறீர்கள் என்று நினைவில் வைத்துக்கொள்கிறேன்.",
         "tanglish": "Seri! Neenga {value}-la irukkeenga nu save panniten.",
-        "english":  "Got it! I'll remember you're in {value}.",
+        "english":  "Got it! I'll remember you live in {value}.",
+    },
+    "user_origin": {
+        "tamil":    "சரி! நீங்கள் {value}-லிருந்து வருகிறீர்கள் என்று நினைவில் வைத்துக்கொள்கிறேன்.",
+        "tanglish": "Seri! Neenga {value}-la irundhu vareenga nu save panniten.",
+        "english":  "Got it! I'll remember you're originally from {value}.",
     },
     "user_workplace": {
         "tamil":    "சரி! நீங்கள் {value}-இல் வேலை செய்கிறீர்கள் என்று நினைவில் வைத்துக்கொள்கிறேன்.",
@@ -610,17 +652,18 @@ _STATEMENT_PATTERNS: dict[str, list[str]] = {
         "en goal ", "என் இலக்கு ", "என்னுடைய இலக்கு ", "ஆக வேண்டும்",
     ],
     "user_location": [
-        # English
-        "i live in ", "i am from ", "i'm from ", "i am based in ",
-        # Tanglish: statements about where you live/are
-        "naan enga vasikiren", "naan enga irukken", 
-        "naa enga irukken", "naa irukken",  # bare "I am" statement
-        # Tanglish: statements about where you came from (origin)
-        "naa irundhu varen", "irundhu varen",  # "I am coming from"
-        "la irundhu varen",  # "from X"
-        "irundhu varen",  # "coming from"
-        # Simple past/present residence queries
-        "entha ooru", "en ooru",
+        # English residence statements
+        "i live in ", "i am based in ",
+        # Tanglish residence statements; city name may appear before these endings
+        " la irukken", " la iruken", " la vasikkiren", " la vasikiren",
+        " il irukken", " il iruken",
+    ],
+    "user_origin": [
+        # English origin statements
+        "i am from ", "i'm from ", "i come from ",
+        # Tanglish origin statements
+        " la irundhu varen", " la irunthu varen",
+        " irundhu varen", " irunthu varen",
     ],
     "user_interest": [
         "i like ", "i love ", "i enjoy ", "my hobby is ", "my interest is ",

@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 KNOWN_KEYS: dict[str, str] = {
     "user_name":                "identity",
     "user_location":            "identity",
+    "user_origin":              "identity",
     "user_workplace":           "work",
     "user_job_title":           "work",
     "user_school":              "education",
@@ -201,6 +202,10 @@ _STMT_PATTERNS: list[re.Pattern] = [
         r"\bnaan\s+\w+\s+(?:kathukittu|kathukkitu|kathukkiren|kathukiren|padikiren|padikittu)\b",
         r"\bi (like|love|enjoy)\b",
         r"\bmy (hobby|interest|passion)\b",
+        # Tanglish origin statements
+        # Tanglish origin statements
+        r"\b[a-z][a-z\s]*?\s+la\s+irundhu\s+varen\b",
+        r"\b[a-z][a-z\s]*?\s+la\s+irunthu\s+varen\b",
         r"\benakku\s+\w+\s*pudikkum\b",
         r"\bi (can|know how to)\b",
         r"\bmy skill\b",
@@ -480,31 +485,48 @@ _ASCII_REGEXES: list[tuple[str, re.Pattern]] = [
         r"naan\s+([A-Za-z][\w\s&.,\-]{1,60}?)\s+la\s+work\s+pan",
         re.IGNORECASE,
     )),
-    # Location (English)
+    
+# Location (English): current residence
     ("user_location", re.compile(
-        r"i\s+(?:live in|am from|am based in)\s+([A-Za-z][A-Za-z ,\-]{1,40}?)(?:[.!,]|$)",
+        r"i\s+(?:live in|am based in)\s+([A-Za-z][A-Za-z ,\-]{1,40}?)(?:[.!,]|$)",
         re.IGNORECASE,
     )),
-    # Location (Tanglish): current residence "naa Madurai la iruken"
+
+# Location (Tanglish): current residence
     ("user_location", re.compile(
-        r"naa\s+([A-Za-z][A-Za-z ,\-]{1,40}?)\s+la\s+iruken",
+        r"naa\s+([A-Za-z][A-Za-z ,\-]{1,40}?)\s+la\s+iruken\b",
         re.IGNORECASE,
     )),
-    # Location (Tanglish): place of origin "naa Madurai la irundhu varen" or "naa Madurai irundhu"
-    ("user_location", re.compile(
-        r"naa\s+([A-Za-z][A-Za-z ,\-]{1,40}?)\s+(?:la\s+)?irundhu\s+(?:varen|irundhu)",
+
+# Origin (English): "I am from Madurai", "I'm from Madurai", "I come from Madurai"
+    ("user_origin", re.compile(
+        r"i\s+(?:am\s+from|'m\s+from|come\s+from)\s+([A-Za-z][A-Za-z ,\-]{1,40}?)(?:[.!,]|$)",
         re.IGNORECASE,
     )),
-    # Location (Tanglish): "en ooru Madurai" (my town is Madurai)
+
+# Origin (Tanglish): supports "naa Madurai la irundhu varen"
+# and "villapuram la irundhu varen", with or without naa/naan.
+    ("user_origin", re.compile(
+        r"(?:(?:naa|naan)\s+)?([A-Za-z][A-Za-z ,\-]{1,40}?)\s+(?:la\s+)?irundhu\s+varen\b",
+        re.IGNORECASE,
+    )),
+    ("user_origin", re.compile(
+        r"(?:(?:naa|naan)\s+)?([A-Za-z][A-Za-z ,\-]{1,40}?)\s+(?:la\s+)?irunthu\s+varen\b",
+        re.IGNORECASE,
+    )),
+
+# Location (Tanglish): "en ooru Madurai"
     ("user_location", re.compile(
         r"en\s+ooru\s+([A-Za-z][A-Za-z ,\-]{1,40}?)(?:\s+[aandi]|[.!,]|$)",
         re.IGNORECASE,
     )),
-    # Location (Tanglish): "en vaazhum ooru Madurai" (town where I live)
+
+# Location (Tanglish): "en vaazhum ooru Madurai"
     ("user_location", re.compile(
-        r"en\s+(?:vaazhum|padichen)\s+ooru\s+([A-Za-z][A-Za-z ,\-]{1,40}?)(?:[.!,]|$)",
+        r"en\s+(?:vaazhum)\s+ooru\s+([A-Za-z][A-Za-z ,\-]{1,40}?)(?:[.!,]|$)",
         re.IGNORECASE,
     )),
+
 ]
 
 # Words that should not be treated as extracted values
@@ -688,7 +710,7 @@ Return exactly this shape (and nothing else):
 {"facts": [{"key": "KEY", "value": "VALUE", "confidence": FLOAT}]}
 
 Allowed keys:
-  user_name, user_location, user_workplace, user_job_title,
+  user_name, user_location, user_origin, user_workplace, user_job_title,
   user_school, user_field_of_study, user_learning, user_interest,
   user_skill, user_goal, user_language_preference, user_response_style
 
