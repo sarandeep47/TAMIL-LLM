@@ -307,6 +307,9 @@ _INTENT_PATTERNS: dict[str, list[str]] = {
 
 # Tanglish keywords for language-style detection
 _TANGLISH_WORDS: frozenset[str] = frozenset({
+    # Greetings
+    "vanakkam", "eppidi", "nalla",
+    # Common Tanglish pronouns and question words
     "enna", "en", "naan", "naa", "na", "neenga", "enga",
     "irukken", "iruken", "pudikkum", "peru", "peyar",
     "kathukkiren", "kathukittu", "velai", "seykiren",

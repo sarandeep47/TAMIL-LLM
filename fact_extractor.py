@@ -223,6 +223,8 @@ _STMT_PATTERNS: list[re.Pattern] = [
         r"\b(?:naa|naan)\s+[A-Za-z].{1,60}?\s+padikuren\b",
         r"\bi(?:'m| am) studying at\b",
         r"\bi study at\b",
+        # School — degree-based statements (e.g., "naa BE pannen KLN la")
+        r"\b(?:naa|naan)\s+(?:[A-Z]{2,}|[A-Z][A-Za-z]*)\s+pannen\s+(?=[A-Z])[A-Za-z]",
         # Degree (must have explicit keywords to avoid false positives with field of study)
         r"\bi have\s+(?:a\s+)?[A-Z]{2,8}\s+(?:degree|qualification)\b",
         r"\bi(?:'m| am) (?:doing|pursuing)\s+(?:my\s+)?[A-Z]{2,8}\s+degree\b",
