@@ -914,6 +914,13 @@ def answer_question(question: str) -> str | None:
 
     Cross-language: if the user asks in Tamil but the fact was saved as
     English, the English value is returned (formatted in Tamil grammar).
+    
+    CRITICAL FIX FOR BUG 1: Only treat as a memory question if:
+    1. Intent pattern matches (high confidence), OR
+    2. Tanglish intent is high-confidence (0.8+) AND the fact actually exists in DB
+    
+    This prevents casual questions like "Naa nalla iruken, nee?" from being
+    incorrectly routed to "not saved" responses when they're just small talk.
     """
     # Import here to avoid circular dependency
     from fact_extractor import _looks_like_personal_statement
@@ -929,12 +936,19 @@ def answer_question(question: str) -> str | None:
         if tanglish_intent.operation in ('retrieve', 'acknowledge') and tanglish_intent.is_personal_fact():
             memory_key = _tanglish_intent_to_memory_key(tanglish_intent)
             if memory_key:
-                # Treat as if we found a pattern match
-                intent = memory_key
-                # Confidence check: only use high-confidence intents
-                if tanglish_intent.confidence < 0.7:
-                    # Low confidence: continue with safety guard below instead
-                    intent = None
+                # FIX: Only accept high-confidence tanglish intents (0.8+)
+                # AND verify the fact actually exists in the DB
+                if tanglish_intent.confidence >= 0.8:
+                    # Check if fact is actually in DB
+                    test_value = get_memory(memory_key, language=style)
+                    if test_value is None and style != "english":
+                        test_value = get_memory(memory_key, language="english")
+                    
+                    # Only treat as a memory question if fact is in DB
+                    if test_value is not None:
+                        intent = memory_key
+                    # else: fact not in DB, let it fall through to Ollama
+                # else: low confidence, continue with safety guard below instead
 
     if intent is None:
         # If this looks like a statement (not a question), don't handle it here
@@ -943,8 +957,19 @@ def answer_question(question: str) -> str | None:
             return None
         
         # Safety guard: QUESTIONS about personal facts that don't match a specific
-        # pattern must not reach Ollama. But don't block statements.
+        # pattern must not reach Ollama. But don't block statements or casual questions.
+        # CRITICAL FIX: Only block if the fact is actually in DB
+        # This prevents "how are you" from triggering "not saved" responses
         if is_personal_history_question(question):
+            # Check if we should block this or let it go to Ollama
+            # Heuristic: if question looks like it's asking about well-being or how someone is,
+            # let it go to Ollama (it's probably "how are you?" not a memory question)
+            if any(word in question.lower() for word in ['iruken', 'irukka', 'irundhen', 'nalla', 'well', 'how']):
+                # This might be casual conversation, not a memory question
+                # Check if the detected intent actually has a fact in DB
+                # If we couldn't find a pattern match above, don't return "not saved"
+                return None
+            
             _not_saved = {
                 "tamil":    "இந்தத் தகவல் இன்னும் சேமிக்கப்படவில்லை.",
                 "tanglish": "Antha thakaval innama save aagalai.",

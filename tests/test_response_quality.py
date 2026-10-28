@@ -5,16 +5,15 @@ Regression tests for chatbot response-quality improvements.
 
 Coverage
 --------
-1.  Language consistency: statements in Tamil/Tanglish/English get ack in
-    the SAME language (deterministic short-circuit, no Ollama needed).
-2.  Irrelevant-response-after-save prevention: statements are acknowledged
-    by acknowledge_statement() before reaching Ollama.
-3.  Correct fact retrieval for questions (deterministic path verified).
-4.  Missing-fact polite replies in all three dialects.
-5.  acknowledge_statement() returns None when fact not in DB (not yet saved).
-6.  Single merged system message: _build_system_message() produces ONE string
+1.  Language consistency for questions: direct personal-memory questions get 
+    answers in the SAME language (deterministic lookup, no Ollama).
+2.  Correct fact retrieval for direct questions (deterministic path verified).
+3.  Missing-fact polite replies in all three dialects.
+4.  Single merged system message: _build_system_message() produces ONE string
     that contains both the base prompt and the memory block.
-7.  Ollama is NEVER called when a statement or question can be handled locally.
+5.  Statements now call Ollama for natural conversational responses, with
+    memory context injected into the system prompt for context awareness.
+6.  Direct questions use answer_question() for deterministic DB recall.
 
 All Ollama HTTP calls are patched out so tests run without a running instance.
 """
@@ -69,105 +68,24 @@ def isolated_dbs(tmp_path, monkeypatch):
 
 
 # ===========================================================================
-# 1. Language consistency — acknowledge_statement()
+# Direct question retrieval (deterministic, no Ollama)
 # ===========================================================================
 
-class TestAcknowledgeStatementLanguageConsistency:
-    """
-    After a fact is saved by extract_facts(), acknowledge_statement() must
-    return a reply in the SAME language the user used — no Ollama required.
-    """
-
-    def test_english_name_ack_is_english(self):
-        import memory_db
-        from chat_memory import acknowledge_statement
-        memory_db.save_memory("user_name", "Sarandeep",
-                              category="identity", source="regex")
-        reply = acknowledge_statement("My name is Sarandeep")
-        assert reply is not None, "Must return an acknowledgment"
-        # Must contain the value
-        assert "Sarandeep" in reply
-        # Must be English — no Tamil script
-        assert not any("\u0B80" <= ch <= "\u0BFF" for ch in reply), (
-            f"English input got Tamil output: {reply!r}"
-        )
-
-    def test_tanglish_learning_ack_is_tanglish(self):
-        import memory_db
-        from chat_memory import acknowledge_statement
-        memory_db.save_memory("user_learning", "Python",
-                              category="learning", source="regex")
-        reply = acknowledge_statement("Naan Python kathukittu irukken")
-        assert reply is not None
-        assert "Python" in reply
-        # Tanglish ack must NOT be Tamil script
-        assert not any("\u0B80" <= ch <= "\u0BFF" for ch in reply), (
-            f"Tanglish input got Tamil-script output: {reply!r}"
-        )
-        # Must contain a Tanglish word
-        assert any(w in reply.lower() for w in ("seri", "save", "panniten",
-                                                  "kathukureengga", "neenga")), (
-            f"Expected Tanglish ack, got: {reply!r}"
-        )
-
-    def test_tamil_name_ack_is_tamil(self):
-        import memory_db
-        from chat_memory import acknowledge_statement
-        memory_db.save_memory("user_name", "Sarandeep",
-                              category="identity", source="regex")
-        reply = acknowledge_statement("என் பெயர் சரண்தீப்")
-        assert reply is not None
-        # Tamil ack must contain Tamil script
-        assert any("\u0B80" <= ch <= "\u0BFF" for ch in reply), (
-            f"Tamil input got non-Tamil output: {reply!r}"
-        )
-
-    def test_tamil_learning_ack_is_tamil(self):
-        import memory_db
-        from chat_memory import acknowledge_statement
-        memory_db.save_memory("user_learning", "Python",
-                              category="learning", source="regex")
-        reply = acknowledge_statement(
-            "நான் Python கற்றுக்கொண்டு இருக்கிறேன்"
-        )
-        assert reply is not None
-        assert "Python" in reply
-        assert any("\u0B80" <= ch <= "\u0BFF" for ch in reply), (
-            f"Tamil input got non-Tamil output: {reply!r}"
-        )
-
-    def test_tanglish_goal_ack_is_tanglish(self):
-        import memory_db
-        from chat_memory import acknowledge_statement
-        memory_db.save_memory("user_goal", "AI Engineer",
-                              category="goal", source="regex")
-        reply = acknowledge_statement("En goal AI Engineer aaganum")
-        assert reply is not None
-        assert "AI Engineer" in reply
-        assert not any("\u0B80" <= ch <= "\u0BFF" for ch in reply)
-
-    def test_english_workplace_ack_is_english(self):
-        import memory_db
-        from chat_memory import acknowledge_statement
-        memory_db.save_memory("user_workplace", "Tarcin Robotics",
-                              category="work", source="regex")
-        reply = acknowledge_statement("I work at Tarcin Robotics")
-        assert reply is not None
-        assert "Tarcin Robotics" in reply
-        assert not any("\u0B80" <= ch <= "\u0BFF" for ch in reply)
-
-
-# ===========================================================================
-# 2. No Ollama call when statement can be handled locally
-# ===========================================================================
 
 class TestNoOllamaForStatements:
     """
-    Statements whose facts are in the DB must be handled by
-    acknowledge_statement() — Ollama must NOT be called.
+    Direct personal-memory questions must be handled deterministically without
+    Ollama (using answer_question()). But statements now go to Ollama for natural
+    conversational responses, with memory context injected into the prompt.
+    
+    The key difference:
+    - "What is my name?" → deterministic DB lookup, no Ollama
+    - "My name is Sarandeep" → Ollama generates natural response (which may be 
+      a friendly greeting or acknowledgment in the proper language)
     """
 
-    def test_english_name_statement_no_ollama(self):
+    def test_english_name_statement_calls_ollama(self):
+        """Statements now go to Ollama for natural conversation."""
         import memory_db, chatbot
         from fact_extractor import extract_facts
         with patch("fact_extractor.requests.post",
@@ -175,72 +93,67 @@ class TestNoOllamaForStatements:
             # regex handles this without Ollama in fact_extractor
             extract_facts("My name is Sarandeep")
 
-        # Now ask_ollama — must not call Ollama
+        # Now ask_ollama — should call Ollama for natural response
         with patch("chatbot.requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "message": {"content": "Great! I'm Sarandeep now in my records."}
+            }
+            mock_resp.raise_for_status.return_value = None
+            mock_post.return_value = mock_resp
+
             result = chatbot.ask_ollama("My name is Sarandeep")
 
-        mock_post.assert_not_called()
+        # Should call Ollama for natural response
+        mock_post.assert_called_once()
         assert result is not None
-        assert "Sarandeep" in result
+        assert "Sarandeep" in result or "Great" in result
 
-    def test_tanglish_learning_statement_no_ollama(self):
+    def test_tanglish_learning_statement_calls_ollama(self):
+        """Tanglish statements also go to Ollama for natural responses."""
         import memory_db, chatbot
         memory_db.save_memory("user_learning", "Python",
                               category="learning", source="regex")
 
         with patch("chatbot.requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "message": {"content": "Semma! Python nalla language."}
+            }
+            mock_resp.raise_for_status.return_value = None
+            mock_post.return_value = mock_resp
+
             result = chatbot.ask_ollama("Naan Python kathukittu irukken")
 
-        mock_post.assert_not_called()
-        assert "Python" in result
+        mock_post.assert_called_once()
+        assert "Python" in result or "Semma" in result
 
-    def test_tamil_goal_statement_no_ollama(self):
+    def test_tamil_goal_statement_calls_ollama(self):
+        """Tamil statements also go to Ollama for natural responses."""
         import memory_db, chatbot
         memory_db.save_memory("user_goal", "AI Engineer",
                               category="goal", source="regex")
 
         with patch("chatbot.requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "message": {"content": "மிக அருமை! AI Engineer ஆக வேண்டும்."}
+            }
+            mock_resp.raise_for_status.return_value = None
+            mock_post.return_value = mock_resp
+
             result = chatbot.ask_ollama(
                 "என்னுடைய இலக்கு AI Engineer ஆக வேண்டும்"
             )
 
-        mock_post.assert_not_called()
-        assert "AI Engineer" in result
+        mock_post.assert_called_once()
+        assert result is not None
 
 
 # ===========================================================================
-# 3. Statement ack returns None when fact NOT yet in DB
+# 3. Deterministic question retrieval (direct memory questions)
 # ===========================================================================
 
-class TestAcknowledgeStatementRequiresDbFact:
-    """
-    acknowledge_statement() must return None when the fact isn't in the DB yet.
-    This ensures new statements reach the normal extraction → ack pipeline
-    and don't silently return a wrong reply.
-    """
-
-    def test_returns_none_when_fact_absent(self):
-        from chat_memory import acknowledge_statement
-        # DB is empty — fact not saved yet
-        result = acknowledge_statement("My name is Sarandeep")
-        assert result is None, (
-            "acknowledge_statement must return None when fact not in DB"
-        )
-
-    def test_returns_none_for_tanglish_before_save(self):
-        from chat_memory import acknowledge_statement
-        result = acknowledge_statement("Naan Python kathukittu irukken")
-        assert result is None
-
-    def test_returns_none_for_random_message(self):
-        from chat_memory import acknowledge_statement
-        result = acknowledge_statement("Tell me a joke.")
-        assert result is None
-
-
-# ===========================================================================
-# 4. Deterministic question retrieval (no Ollama)
-# ===========================================================================
 
 class TestDeterministicQuestionRetrieval:
     """
@@ -391,10 +304,12 @@ class TestMergedSystemMessage:
 
 class TestFullStatementPipeline:
     """
-    Simulate the main() loop sequence:
+    Simulate the main() loop sequence with the new natural conversation flow:
     extract_facts() saves the fact, then ask_ollama() is called on the SAME
-    message — the whole pipeline must produce an acknowledged response without
-    hitting Ollama.
+    message — Ollama now generates a natural response with memory context.
+    
+    The memory context is injected into the system prompt so Ollama is aware
+    of the user's profile, enabling natural follow-up conversation.
     """
 
     def _save_via_regex(self, message: str):
@@ -408,35 +323,74 @@ class TestFullStatementPipeline:
     def test_english_name_full_pipeline(self):
         import chatbot
         self._save_via_regex("My name is Sarandeep")
+        
         with patch("chatbot.requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "message": {"content": "Nice to meet you Sarandeep!"}
+            }
+            mock_resp.raise_for_status.return_value = None
+            mock_post.return_value = mock_resp
+            
             reply = chatbot.ask_ollama("My name is Sarandeep")
-        mock_post.assert_not_called()
-        assert "Sarandeep" in reply
+        
+        # Should call Ollama for natural response
+        mock_post.assert_called_once()
+        assert "Sarandeep" in reply or "Nice" in reply
+        # Response should be in English (matching input language)
         assert not any("\u0B80" <= ch <= "\u0BFF" for ch in reply)
 
     def test_tanglish_learning_full_pipeline(self):
         import chatbot
         self._save_via_regex("Naan Python kathukittu irukken")
+        
         with patch("chatbot.requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "message": {"content": "Semma! Python nalla language, enna domain?"}
+            }
+            mock_resp.raise_for_status.return_value = None
+            mock_post.return_value = mock_resp
+            
             reply = chatbot.ask_ollama("Naan Python kathukittu irukken")
-        mock_post.assert_not_called()
-        assert "Python" in reply
-        assert not any("\u0B80" <= ch <= "\u0BFF" for ch in reply)
+        
+        # Should call Ollama for natural response
+        mock_post.assert_called_once()
+        assert "Python" in reply or "Semma" in reply
 
     def test_tamil_name_full_pipeline(self):
         import chatbot
         self._save_via_regex("என் பெயர் சரண்தீப்")
+        
         with patch("chatbot.requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "message": {"content": "சரண்தீப்! அழகான பெயர்."}
+            }
+            mock_resp.raise_for_status.return_value = None
+            mock_post.return_value = mock_resp
+            
             reply = chatbot.ask_ollama("என் பெயர் சரண்தீப்")
-        mock_post.assert_not_called()
-        assert reply is not None
-        # Tamil ack must contain Tamil script
+        
+        # Should call Ollama for natural response
+        mock_post.assert_called_once()
+        # Tamil response should contain Tamil script
         assert any("\u0B80" <= ch <= "\u0BFF" for ch in reply)
 
     def test_tanglish_goal_full_pipeline(self):
         import chatbot
         self._save_via_regex("En goal AI Engineer aaganum")
+        
         with patch("chatbot.requests.post") as mock_post:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "message": {"content": "Semma! AI Engineer aaganum appadina enna domain?"}
+            }
+            mock_resp.raise_for_status.return_value = None
+            mock_post.return_value = mock_resp
+            
             reply = chatbot.ask_ollama("En goal AI Engineer aaganum")
-        mock_post.assert_not_called()
+        
+        # Should call Ollama for natural response
+        mock_post.assert_called_once()
         assert "AI Engineer" in reply

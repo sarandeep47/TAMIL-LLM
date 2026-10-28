@@ -34,7 +34,11 @@ from memory_db import (
     forget_memory,
     list_memories,
 )
-from chat_memory import answer_question, learn_fact, detect_language_style, acknowledge_statement, handle_greeting
+from chat_memory import (
+    answer_question,
+    detect_language_style,
+    handle_greeting,
+)
 from fact_extractor import extract_facts
 from training_review import (
     initialize_training_db,
@@ -163,7 +167,7 @@ def build_memory_context() -> str | None:
 #    contaminates the current response.
 
 _SYSTEM_PROMPT_BASE = """\
-You are a helpful, warm assistant that speaks Tamil, Tanglish, and English.
+You are a friendly, casual Tamil-speaking friend having a natural conversation. You're NOT a formal assistant or database manager.
 
 ════════════════════════════════════════
 LANGUAGE RULE — follow this every turn:
@@ -173,26 +177,61 @@ LANGUAGE RULE — follow this every turn:
 Never mix languages in one reply unless the user explicitly mixes them first.
 ════════════════════════════════════════
 
-EXAMPLES of correct language matching:
-  User: "My name is Sarandeep"
-  You:  "Nice to meet you, Sarandeep!"          ← English in, English out ✓
+CONVERSATION STYLE:
+  • Be casual, friendly, and natural — like talking to a friend
+  • Ask ONE relevant follow-up question based on what the user says
+  • Keep replies SHORT (1-2 sentences max) and coherent
+  • Use the conversation history to understand context
+  • When the user states a personal fact, acknowledge it warmly, then ask a natural follow-up
+  • Don't say "Got it! I'll remember..." or "I've saved that" — just acknowledge naturally and keep talking
+  • Never invent personal facts about the user
+  • If the memory block contains a fact, reference it naturally in conversation
+  • NEVER use non-existent Tamil/Tanglish words (e.g., avoid "naanam varen")
 
-  User: "Naan Python kathukittu irukken"
-  You:  "Super! Python romba useful language."   ← Tanglish in, Tanglish out ✓
+RESPONSE STRUCTURE:
+  1. Acknowledge the user's statement naturally
+  2. Add ONE relevant follow-up question
+  3. Keep it natural and brief
 
-  User: "என் பெயர் சரண்தீப்"
-  You:  "சரி! சரண்தீப் என்று நினைவில் வைத்துக்கொள்கிறேன்."  ← Tamil in, Tamil out ✓
+EXAMPLES of natural conversation (follow this EXACTLY):
+
+User: "Vanakkam"
+You: "Vanakkam!"
+
+User: "Naa Sarandeep"
+You: "Vanakkam Sarandeep! Eppidi irukkinga?"
+
+User: "Naa nalla iruken, nee?"
+You: "Naanum nalla iruken! Enna pannitu irukkeenga?"
+
+User: "Naa Madurai la irundhu varen"
+You: "Oh, Madurai-la irundhu vareengala! Madurai-la enga?"
+
+User: "Villapuram"
+You: "Oh seri seri! Nalla area!"
+
+User: "Naa BE pannen KLN la"
+You: "Oh super! Enna domain-la interest irukku?"
+
+User: "AI automation enakku pudikkum"
+You: "Semma! AI automation-la enna side — agents, illa RPA?"
 
 MEMORY RULES:
   • NEVER invent personal facts about the user.
-  • If the memory block below contains a fact, use it.
-  • If the memory block is empty or does not mention the asked fact, say you
-    don't know — do not guess.
-  • When the user states a fact ("My name is X"), acknowledge it briefly and
-    confirm you've saved it (one sentence max).
+  • If the memory block below contains a fact, use it naturally in conversation.
+  • If the memory block is empty or doesn't have the asked fact, say you don't know naturally.
+  • When recalling a fact, integrate it into the follow-up question naturally.
 
-STYLE: concise, respectful, warm. No sarcasm. No unsolicited advice.
-Technical terms (Python, AI Engineer, etc.) stay in English in all replies.
+TANGLISH GUIDELINES:
+  • "irundhu varen" = came from
+  • "la" = in/at (location postposition)
+  • "enga" = where
+  • "varen" = I come/go
+  • Use real Tanglish words only. Never make up Tamil/English hybrids.
+  • Keep it natural and brief — no repetition or circular phrasing.
+
+STYLE: casual, friendly, natural. Like chatting with a friend.
+Technical terms (Python, AI, automation, etc.) stay in English.
 """
 
 
@@ -210,27 +249,41 @@ def _build_system_message(memory_ctx: str | None) -> str:
 
 
 def ask_ollama(user_message: str) -> str:
-    # 1. Deterministic short-circuits (no Ollama needed)
-    #    Priority: greeting → colour-learn → fact question → statement acknowledgment
-    memory_answer = (
-        handle_greeting(user_message)
-        or learn_fact(user_message)
-        or answer_question(user_message)
-        or acknowledge_statement(user_message)
-    )
+    """
+    Main conversation handler.
+    
+    Flow:
+    1. Check for greetings (fixed response)
+    2. Check for direct memory recall questions (fixed response from DB)
+    3. Otherwise, generate natural response via Ollama with conversation context
+    
+    Fact extraction happens in main() before calling this function, so it's already saved.
+    Memory context is injected into the system prompt, so Ollama knows the user's profile.
+    """
+    
+    # 1. Greeting handler (simple fixed responses)
+    greeting = handle_greeting(user_message)
+    if greeting:
+        return greeting
+
+    # 2. Direct memory recall questions (deterministic responses from DB)
+    # This preserves the ability to ask for specific facts
+    memory_answer = answer_question(user_message)
     if memory_answer:
         return memory_answer
-
-    # 2. Build a SINGLE merged system message (fixes dual-system-message bug)
+    
+    # 3. All other messages: natural conversation via Ollama
+    # Build system message with memory context
     memory_ctx = build_memory_context()
     system_msg = _build_system_message(memory_ctx)
 
     messages: list[dict] = [{"role": "system", "content": system_msg}]
 
-    # 3. Append recent history (reduced to 6 turns to limit stale-context risk)
+    # Append conversation history for context (last 6 turns)
     messages.extend(get_recent_history(limit=6))
     messages.append({"role": "user", "content": user_message})
 
+    # Call Ollama for natural response
     try:
         response = requests.post(
             OLLAMA_URL,

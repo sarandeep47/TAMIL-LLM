@@ -406,6 +406,12 @@ _ASCII_REGEXES: list[tuple[str, re.Pattern]] = [
     ("user_school_past", re.compile(
         r"(?:naa|naan)\s+(?=[A-Z])([A-Za-z][\w\s.,\-]{3,})\s+padichen\b",
     )),
+    # Pattern 3: "naa <Degree> pannen <Institution>" — passed degree at college (BUG 3 FIX)
+    # Captures: "naa BE pannen KLN la" → KLN (capitalize institution name)
+    ("user_school_past", re.compile(
+        r"(?:naa|naan)\s+(?:[A-Z]{2,}|[A-Z][A-Za-z]*)\s+pannen\s+(?=[A-Z])([A-Za-z][\w\s.,\-]{2,}?)(?:\s+(?:la|il|le))?(?:[.!,]|$)",
+        re.IGNORECASE,
+    )),
     ("user_school_past", re.compile(
         r"i\s+studied\s+at\s+([A-Za-z][\w\s.,&\-]{1,60}?)(?:[.!,]|$)",
         re.IGNORECASE,

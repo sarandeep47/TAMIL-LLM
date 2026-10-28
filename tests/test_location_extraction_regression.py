@@ -111,9 +111,9 @@ class TestTanglishLocationRegexPatterns:
         assert matches_found, f"No regex matched Tanglish location patterns from {test_cases}"
     
     def test_tanglish_irundhu_pattern(self):
-        """Regex should support 'naa X irundhu varen' pattern."""
+        """Regex should support 'naa X irundhu varen' pattern for origin (not location)."""
         from fact_extractor import _ASCII_REGEXES
-        location_regexes = [r for k, r in _ASCII_REGEXES if k == 'user_location']
+        origin_regexes = [r for k, r in _ASCII_REGEXES if k == 'user_origin']
         
         test_cases = [
             "naa Madurai irundhu varen",
@@ -122,12 +122,12 @@ class TestTanglishLocationRegexPatterns:
         
         matches_found = False
         for test_case in test_cases:
-            for regex in location_regexes:
+            for regex in origin_regexes:
                 if regex.search(test_case):
                     matches_found = True
                     break
         
-        assert matches_found, f"No regex matched Tanglish origin patterns"
+        assert matches_found, f"No regex matched Tanglish origin patterns in user_origin"
 
 
 class TestCollegeDetectionInExtraction:
