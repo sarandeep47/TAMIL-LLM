@@ -79,7 +79,7 @@ def transcribe_audio_array(audio_array: np.ndarray):
             condition_on_previous_text=False,
             repetition_penalty=1.1,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500, threshold=0.35)
+            vad_parameters=dict(min_silence_duration_ms=500, threshold=0.42)  # Optimal sweet spot
         )
 
         text = "".join([segment.text for segment in segments]).strip()

@@ -626,9 +626,11 @@
         // ============ RECORDING ============
         async function startListening() {
             try {
-                // Stop any bot voice immediately so mic doesn't hear it
+                // Stop any bot voice immediately and wait for it to stop
                 if (window.speechSynthesis) {
                     window.speechSynthesis.cancel();
+                    // Wait 300ms for audio to stop playing from speaker
+                    await new Promise(resolve => setTimeout(resolve, 300));
                 }
 
                 console.log('Requesting microphone access...');
