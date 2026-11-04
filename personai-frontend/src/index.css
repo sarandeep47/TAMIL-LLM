@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+* {
+  @apply scroll-smooth;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-dark-bg text-dark-text font-sans;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  @apply w-2;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-dark-bg;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-dark-border rounded-full hover:bg-dark-text-muted;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    @apply opacity-0 translate-y-2;
+  }
+  to {
+    @apply opacity-100 translate-y-0;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Markdown Styling */
+.prose {
+  @apply text-dark-text;
+}
+
+.prose code {
+  @apply bg-dark-bg text-accent-purple px-1 py-0.5 rounded text-sm;
+}
+
+.prose pre {
+  @apply bg-dark-bg rounded-lg overflow-x-auto;
+}
+
+.prose strong {
+  @apply font-semibold text-accent-purple;
+}
+
+.prose em {
+  @apply italic text-accent-purple-light;
+}
+
+.prose a {
+  @apply text-accent-purple hover:underline;
+}
+
+.prose blockquote {
+  @apply border-l-4 border-accent-purple pl-4 italic text-dark-text-muted;
+}
+
+/* Focus States */
+input:focus,
+textarea:focus,
+button:focus {
+  @apply outline-none;
+}
+
+/* Loading Animation */
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 2s linear infinite;
+}
+
+/* Glass Effect */
+.glass {
+  @apply bg-white/10 backdrop-blur-md border border-white/20;
+}
+
+/* Glow Effect */
+.glow {
+  @apply shadow-lg shadow-accent-purple/50;
+}
