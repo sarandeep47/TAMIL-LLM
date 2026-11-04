@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tamil Voice Assistant</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #0f1013 0%, #121316 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            padding: 20px;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-top: 20px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 300;
+            letter-spacing: 0.5px;
+            margin-bottom: 15px;
+            background: linear-gradient(135deg, #a78bfa 0%, #60a5fa 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .status-pills {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            font-size: 13px;
+            transition: all 0.3s ease;
+        }
+
+        .status-pill.active {
+            background: rgba(96, 165, 250, 0.1);
+            border-color: rgba(96, 165, 250, 0.3);
+            color: #60a5fa;
+        }
+
+        .status-pill.inactive {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: rgba(239, 68, 68, 0.3);
+            color: #ef4444;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-pill.active .status-dot {
+            background: #60a5fa;
+        }
+
+        .status-pill.inactive .status-dot {
+            background: #ef4444;
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 40px;
+            overflow-y: auto;
+        }
+
+        /* Mic Button Section */
+        .mic-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .mic-container {
+            position: relative;
+            width: 120px;
+            height: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .mic-pulse {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            border: 2px solid rgba(96, 165, 250, 0.3);
+            animation: none;
+        }
+
+        .mic-pulse.listening {
+            animation: mic-pulse-ring 1.5s infinite;
+        }
+
+        @keyframes mic-pulse-ring {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+            }
+            100% {
+                transform: scale(1.4);
+                opacity: 0;
+            }
+        }
+
+        .mic-button {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            border: none;
+            background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+            color: white;
+            cursor: pointer;
+            font-size: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 8px 32px rgba(59, 130, 246, 0.3);
+            transition: all 0.3s ease;
+            z-index: 10;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .mic-button:hover:not(:disabled) {
+            transform: scale(1.05);
+            box-shadow: 0 12px 40px rgba(59, 130, 246, 0.4);
+        }
+
+        .mic-button:active:not(:disabled) {
+            transform: scale(0.95);
+        }
+
+        .mic-button:disabled {
+            background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+            cursor: not-allowed;
+            box-shadow: 0 8px 32px rgba(107, 114, 128, 0.2);
+        }
+
+        .mic-button.thinking {
+            background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%);
+            box-shadow: 0 8px 32px rgba(139, 92, 246, 0.3);
+        }
+
+        .mic-status {
+            font-size: 14px;
+            color: #9ca3af;
+            text-align: center;
+            height: 20px;
+            min-width: 200px;
+        }
+
+        /* Transcript */
+        .transcript-container {
+            width: 100%;
+            max-width: 700px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            overflow-y: auto;
+            padding: 20px 0;
+            scroll-behavior: smooth;
+        }
+
+        .transcript-container::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .transcript-container::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+        }
+
+        .transcript-container::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .transcript-container::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .message-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message {
+            padding: 12px 16px;
+            border-radius: 18px;
+            max-width: 85%;
+            word-wrap: break-word;
+            line-height: 1.5;
+            font-size: 14px;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: rgba(96, 165, 250, 0.15);
+            border: 1px solid rgba(96, 165, 250, 0.3);
+            color: #e0e0e0;
+        }
+
+        .message.bot {
+            align-self: flex-start;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #e0e0e0;
+        }
+
+        .latency-badge {
+            font-size: 11px;
+            color: #9ca3af;
+            margin-top: 6px;
+            display: flex;
+            gap: 12px;
+        }
+
+        .latency-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            color: #6b7280;
+            font-size: 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            opacity: 0.3;
+        }
+
+        /* Output Controls */
+        .output-controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .output-btn {
+            padding: 8px 16px;
+            background: rgba(96, 165, 250, 0.15);
+            border: 1px solid rgba(96, 165, 250, 0.3);
+            border-radius: 6px;
+            color: #60a5fa;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+            font-family: inherit;
+        }
+
+        .output-btn:hover {
+            background: rgba(96, 165, 250, 0.25);
+            border-color: rgba(96, 165, 250, 0.5);
+        }
+
+        .output-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Output Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: #1e1f24;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 700px;
+            max-height: 80vh;
+            overflow-y: auto;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 20px;
+            color: #e0e0e0;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: #9ca3af;
+            font-size: 24px;
+            cursor: pointer;
+            transition: color 0.3s ease;
+        }
+
+        .modal-close:hover {
+            color: #e0e0e0;
+        }
+
+        .output-text {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 15px;
+            color: #e0e0e0;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: center;
+        }
+
+        .modal-btn {
+            padding: 10px 20px;
+            background: rgba(96, 165, 250, 0.15);
+            border: 1px solid rgba(96, 165, 250, 0.3);
+            border-radius: 6px;
+            color: #60a5fa;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.3s ease;
+            font-family: inherit;
+        }
+
+        .modal-btn:hover {
+            background: rgba(96, 165, 250, 0.25);
+            border-color: rgba(96, 165, 250, 0.5);
+        }
+
+        .modal-btn.primary {
+            background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+            border-color: #3b82f6;
+            color: white;
+        }
+
+        .modal-btn.primary:hover {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+        }
+
+        /* Error Message */
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            text-align: center;
+            animation: slideIn 0.3s ease;
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .container {
+                padding: 12px;
+            }
+
+            .header h1 {
+                font-size: 22px;
+            }
+
+            .header {
+                margin-bottom: 20px;
+            }
+
+            .mic-container {
+                width: 100px;
+                height: 100px;
+            }
+
+            .mic-button {
+                width: 85px;
+                height: 85px;
+                font-size: 36px;
+            }
+
+            .transcript-container {
+                max-width: 100%;
+            }
+
+            .message {
+                max-width: 90%;
+                font-size: 13px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>Tamil Voice Assistant</h1>
+            <div class="status-pills">
+                <div class="status-pill" id="ollama-status">
+                    <span class="status-dot"></span>
+                    <span>Ollama</span>
+                </div>
+                <div class="status-pill" id="whisper-status">
+                    <span class="status-dot"></span>
+                    <span>Whisper</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main">
+            <!-- Transcript Container -->
+            <div class="transcript-container" id="transcript">
+                <div class="empty-state">
+                    <div class="empty-state-icon">🎤</div>
+                    <div>Press the microphone to start speaking</div>
+                </div>
+            </div>
+
+            <!-- Mic Section -->
+            <div class="mic-section">
+                <div class="mic-container">
+                    <div class="mic-pulse" id="mic-pulse"></div>
+                    <button class="mic-button" id="mic-button" title="Press to speak">🎤</button>
+                </div>
+                <div class="mic-status" id="mic-status">Tap to Speak</div>
+                <button class="output-btn" id="diagnose-btn" title="Test microphone" style="margin-top: 15px; font-size: 11px;">🔧 Test Microphone</button>
+            </div>
+
+            <!-- Output Controls -->
+            <div class="output-controls">
+                <button class="output-btn" id="view-output-btn" disabled>📋 View Output</button>
+                <button class="output-btn" id="copy-output-btn" disabled>📋 Copy Output</button>
+                <button class="output-btn" id="download-output-btn" disabled>⬇️ Download TXT</button>
+                <button class="output-btn" id="clear-history-btn">🗑️ Clear History</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Output Modal -->
+    <div class="modal" id="output-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Conversation Output</h2>
+                <button class="modal-close" id="modal-close">&times;</button>
+            </div>
+            <div class="output-text" id="output-text"></div>
+            <div class="modal-footer">
+                <button class="modal-btn" id="modal-copy-btn">📋 Copy</button>
+                <button class="modal-btn primary" id="modal-close-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============ STATE ============
+        let isListening = false;
+        let isProcessing = false;
+        let audioContext = null;
+        let mediaStream = null;
+        let audioProcessor = null;
+        let recordedBuffers = [];
+        let conversationHistory = [];
+        const sampleRate = 16000;
+
+        // ============ DOM ELEMENTS ============
+        const micButton = document.getElementById('mic-button');
+        const micStatus = document.getElementById('mic-status');
+        const micPulse = document.getElementById('mic-pulse');
+        const transcript = document.getElementById('transcript');
+        const ollamaStatus = document.getElementById('ollama-status');
+        const whisperStatus = document.getElementById('whisper-status');
+        
+        // Output controls
+        const viewOutputBtn = document.getElementById('view-output-btn');
+        const copyOutputBtn = document.getElementById('copy-output-btn');
+        const downloadOutputBtn = document.getElementById('download-output-btn');
+        const clearHistoryBtn = document.getElementById('clear-history-btn');
+        const outputModal = document.getElementById('output-modal');
+        const outputText = document.getElementById('output-text');
+        const modalClose = document.getElementById('modal-close');
+        const modalCloseBtn = document.getElementById('modal-close-btn');
+        const modalCopyBtn = document.getElementById('modal-copy-btn');
+        const diagnoseBtn = document.getElementById('diagnose-btn');
+
+        // ============ WAV ENCODING ============
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+
+        function encodeWAV(samples, targetRate) {
+            const buffer = new ArrayBuffer(44 + samples.length * 2);
+            const view = new DataView(buffer);
+
+            // RIFF chunk descriptor
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + samples.length * 2, true);
+            writeString(view, 8, 'WAVE');
+
+            // fmt sub-chunk (PCM 16-bit Mono)
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true); // Linear PCM
+            view.setUint16(22, 1, true); // 1 channel (mono)
+            view.setUint32(24, targetRate, true);
+            view.setUint32(28, targetRate * 2, true); // Byte rate
+            view.setUint16(32, 2, true); // Block align
+            view.setUint16(34, 16, true); // 16 bits per sample
+
+            // data sub-chunk
+            writeString(view, 36, 'data');
+            view.setUint32(40, samples.length * 2, true);
+
+            // Write 16-bit PCM samples (clamped)
+            let offset = 44;
+            for (let i = 0; i < samples.length; i++, offset += 2) {
+                let s = Math.max(-1, Math.min(1, samples[i]));
+                view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            }
+
+            return new Blob([view], { type: 'audio/wav' });
+        }
+
+        // ============ RECORDING ============
+        async function startListening() {
+            try {
+                // Stop any bot voice immediately so mic doesn't hear it
+                if (window.speechSynthesis) {
+                    window.speechSynthesis.cancel();
+                }
+
+                console.log('Requesting microphone access...');
+                recordedBuffers = [];
+                
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000,
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    }
+                });
+
+                console.log('✓ Microphone access granted');
+
+                // Create audio context at 16kHz
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ 
+                    sampleRate: 16000 
+                });
+                const source = audioContext.createMediaStreamSource(mediaStream);
+
+                // 4096 buffer size on 16kHz audio gives smooth continuous capture
+                audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                audioProcessor.onaudioprocess = (e) => {
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    recordedBuffers.push(new Float32Array(inputData));
+                    console.log(`Audio chunk: ${inputData.length} samples`);
+                };
+
+                source.connect(audioProcessor);
+                audioProcessor.connect(audioContext.destination);
+                
+                isListening = true;
+                updateUIListening();
+                console.log('✓ Recording started (native WAV stream)');
+
+            } catch (error) {
+                console.error('Microphone error:', error);
+                showError('Microphone access error: ' + error.message);
+                updateUIReady();
+            }
+        }
+
+        function stopListening() {
+            if (audioProcessor && mediaStream) {
+                audioProcessor.disconnect();
+                mediaStream.getTracks().forEach(track => track.stop());
+                if (audioContext && audioContext.state !== 'closed') {
+                    audioContext.close();
+                }
+            }
+
+            isListening = false;
+            isProcessing = true;
+            updateUIProcessing();
+
+            // Merge recorded buffers into one continuous Float32 array
+            const totalLength = recordedBuffers.reduce((acc, curr) => acc + curr.length, 0);
+            const mergedSamples = new Float32Array(totalLength);
+            let offset = 0;
+            for (const buf of recordedBuffers) {
+                mergedSamples.set(buf, offset);
+                offset += buf.length;
+            }
+
+            console.log(`Total samples: ${mergedSamples.length}`);
+
+            // Check if meaningful audio was captured
+            if (mergedSamples.length < 8000) { // Less than 0.5 sec
+                showError('Recording too short (< 0.5 seconds). Please speak for 2+ seconds.');
+                updateUIReady();
+                return;
+            }
+
+            // Package directly into a standard 16kHz PCM WAV Blob
+            const wavBlob = encodeWAV(mergedSamples, 16000);
+            console.log(`Produced WAV blob: ${wavBlob.size} bytes`);
+
+            if (wavBlob.size < 1000) {
+                showError('Audio recording was empty or too short. Please speak louder.');
+                updateUIReady();
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', wavBlob, 'speech.wav');
+            sendAudio(formData);
+        }
+
+        // ============ MIC BUTTON ============
+        micButton.addEventListener('click', () => {
+            if (isListening) {
+                stopListening();
+            } else {
+                startListening();
+            }
+        });
+
+        // Space bar support
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && !isListening && !isProcessing) {
+                e.preventDefault();
+                startListening();
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'Space' && isListening) {
+                e.preventDefault();
+                stopListening();
+            }
+        });
+
+        // ============ HEALTH CHECK ============
+        async function checkHealth() {
+            try {
+                const response = await fetch('/api/health');
+                const data = await response.json();
+                
+                updateStatusPill(ollamaStatus, data.ollama);
+                updateStatusPill(whisperStatus, data.whisper);
+            } catch (error) {
+                console.error('Health check failed:', error);
+                updateStatusPill(ollamaStatus, false);
+                updateStatusPill(whisperStatus, false);
+            }
+        }
+
+        function updateStatusPill(element, isActive) {
+            if (isActive) {
+                element.classList.remove('inactive');
+                element.classList.add('active');
+            } else {
+                element.classList.remove('active');
+                element.classList.add('inactive');
+            }
+        }
+
+        checkHealth();
+        setInterval(checkHealth, 5000);
+
+        // ============ AUDIO PROCESSING ============
+        async function sendAudio(formData) {
+            try {
+                const response = await fetch('/api/voice-turn', {
+                    method: 'POST',
+                    body: formData  // formData already has 'file' appended
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Processing failed');
+                }
+
+                const data = await response.json();
+                
+                // Add messages to transcript
+                addUserMessage(data.user_text, data.stt_latency_ms);
+                addBotMessage(data.bot_text, data.llm_latency_ms);
+
+                // Speak the response
+                speakText(data.bot_text);
+            } catch (error) {
+                console.error('Voice turn error:', error);
+                showError(`Error: ${error.message}`);
+            } finally {
+                isProcessing = false;
+                updateUIReady();
+            }
+        }
+
+        // ============ TEXT-TO-SPEECH ============
+        function speakText(text) {
+            window.speechSynthesis.cancel();
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'ta-IN';
+            utterance.rate = 0.7;  // Slow down: 0.5 (slowest) to 1 (normal) - நல்ல வேக
+            utterance.pitch = 1;
+            utterance.volume = 1;
+
+            const voices = window.speechSynthesis.getVoices();
+            const tamilVoice = voices.find(v => v.lang.includes('ta'));
+            if (tamilVoice) {
+                utterance.voice = tamilVoice;
+            }
+
+            window.speechSynthesis.speak(utterance);
+        }
+
+        // ============ TRANSCRIPT UI ============
+        function addUserMessage(text, latencyMs) {
+            if (!text) return;
+
+            const group = document.createElement('div');
+            group.className = 'message-group';
+
+            const message = document.createElement('div');
+            message.className = 'message user';
+            message.textContent = text;
+
+            const badge = document.createElement('div');
+            badge.className = 'latency-badge';
+            badge.innerHTML = `<span class="latency-item">⚡ STT: ${latencyMs}ms</span>`;
+
+            group.appendChild(message);
+            group.appendChild(badge);
+            transcript.appendChild(group);
+            transcript.scrollTop = transcript.scrollHeight;
+
+            conversationHistory.push({
+                type: 'user',
+                text: text,
+                latency: latencyMs,
+                timestamp: new Date().toLocaleTimeString()
+            });
+
+            updateOutputButtons();
+        }
+
+        function addBotMessage(text, latencyMs) {
+            if (!text) return;
+
+            const group = document.createElement('div');
+            group.className = 'message-group';
+
+            const message = document.createElement('div');
+            message.className = 'message bot';
+            message.textContent = text;
+
+            const badge = document.createElement('div');
+            badge.className = 'latency-badge';
+            badge.innerHTML = `<span class="latency-item">⚡ LLM: ${latencyMs}ms</span>`;
+
+            group.appendChild(message);
+            group.appendChild(badge);
+            transcript.appendChild(group);
+            transcript.scrollTop = transcript.scrollHeight;
+
+            conversationHistory.push({
+                type: 'bot',
+                text: text,
+                latency: latencyMs,
+                timestamp: new Date().toLocaleTimeString()
+            });
+
+            updateOutputButtons();
+        }
+
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error-message';
+            errorDiv.textContent = message;
+            transcript.appendChild(errorDiv);
+            transcript.scrollTop = transcript.scrollHeight;
+
+            setTimeout(() => errorDiv.remove(), 5000);
+        }
+
+        function clearTranscript() {
+            transcript.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">🎤</div>
+                    <div>Press the microphone to start speaking</div>
+                </div>
+            `;
+        }
+
+        // ============ OUTPUT MANAGEMENT ============
+        function formatOutputAsText() {
+            if (conversationHistory.length === 0) return "No conversation yet.";
+
+            let output = "═══════════════════════════════════════════════════\n";
+            output += "   TAMIL VOICE ASSISTANT - CONVERSATION OUTPUT\n";
+            output += "═══════════════════════════════════════════════════\n\n";
+
+            let turnCount = 0;
+            let i = 0;
+            while (i < conversationHistory.length) {
+                if (conversationHistory[i].type === 'user') {
+                    turnCount++;
+                    output += `[TURN ${turnCount}]\n`;
+                    output += `───────────────────────────────────────────────────\n`;
+                    output += `📥 USER ASKED (${conversationHistory[i].timestamp}):\n`;
+                    output += `   ${conversationHistory[i].text}\n`;
+                    output += `   [STT Latency: ${conversationHistory[i].latency}ms]\n\n`;
+
+                    if (i + 1 < conversationHistory.length && conversationHistory[i + 1].type === 'bot') {
+                        output += `📤 BOT REPLIED (${conversationHistory[i + 1].timestamp}):\n`;
+                        output += `   ${conversationHistory[i + 1].text}\n`;
+                        output += `   [LLM Latency: ${conversationHistory[i + 1].latency}ms]\n\n`;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+
+            output += "═══════════════════════════════════════════════════\n";
+            output += `Total Turns: ${turnCount}\n`;
+            output += `Timestamp: ${new Date().toLocaleString()}\n`;
+            output += "═══════════════════════════════════════════════════\n";
+
+            return output;
+        }
+
+        function updateOutputButtons() {
+            const hasHistory = conversationHistory.length > 0;
+            viewOutputBtn.disabled = !hasHistory;
+            copyOutputBtn.disabled = !hasHistory;
+            downloadOutputBtn.disabled = !hasHistory;
+        }
+
+        function showOutputModal() {
+            outputText.textContent = formatOutputAsText();
+            outputModal.classList.add('active');
+        }
+
+        function closeOutputModal() {
+            outputModal.classList.remove('active');
+        }
+
+        function copyOutputToClipboard() {
+            const output = formatOutputAsText();
+            navigator.clipboard.writeText(output).then(() => {
+                const btn = copyOutputBtn;
+                const originalText = btn.textContent;
+                btn.textContent = '✓ Copied!';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                }, 2000);
+            }).catch(err => {
+                console.error('Copy failed:', err);
+                alert('Failed to copy to clipboard');
+            });
+        }
+
+        function downloadOutput() {
+            const output = formatOutputAsText();
+            const blob = new Blob([output], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `tamil-voice-output-${new Date().getTime()}.txt`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }
+
+        function clearHistory() {
+            if (conversationHistory.length === 0) return;
+            if (confirm('Clear all conversation history? This cannot be undone.')) {
+                conversationHistory = [];
+                clearTranscript();
+                updateOutputButtons();
+            }
+        }
+
+        // ============ UI STATE UPDATES ============
+        function updateUIListening() {
+            micButton.disabled = false;
+            micButton.classList.remove('thinking');
+            micStatus.textContent = 'Listening...';
+            micPulse.classList.add('listening');
+        }
+
+        function updateUIProcessing() {
+            micButton.disabled = true;
+            micButton.classList.add('thinking');
+            micStatus.textContent = 'Processing with Qwen...';
+            micPulse.classList.remove('listening');
+        }
+
+        function updateUIReady() {
+            micButton.disabled = false;
+            micButton.classList.remove('thinking');
+            micStatus.textContent = 'Tap to Speak';
+            micPulse.classList.remove('listening');
+        }
+
+        // ============ OUTPUT BUTTON LISTENERS ============
+        viewOutputBtn.addEventListener('click', showOutputModal);
+        copyOutputBtn.addEventListener('click', copyOutputToClipboard);
+        downloadOutputBtn.addEventListener('click', downloadOutput);
+        clearHistoryBtn.addEventListener('click', clearHistory);
+
+        // Modal close buttons
+        modalClose.addEventListener('click', closeOutputModal);
+        modalCloseBtn.addEventListener('click', closeOutputModal);
+
+        // Modal copy button
+        modalCopyBtn.addEventListener('click', () => {
+            const output = outputText.textContent;
+            navigator.clipboard.writeText(output).then(() => {
+                const btn = modalCopyBtn;
+                const originalText = btn.textContent;
+                btn.textContent = '✓ Copied!';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                }, 2000);
+            });
+        });
+
+        // Close modal when clicking outside
+        outputModal.addEventListener('click', (e) => {
+            if (e.target === outputModal) {
+                closeOutputModal();
+            }
+        });
+
+        // ============ MICROPHONE DIAGNOSTICS ============
+        async function testMicrophone() {
+            const results = [];
+            results.push('=== MICROPHONE DIAGNOSTICS ===\n');
+            
+            if (!navigator.mediaDevices) {
+                results.push('❌ MediaDevices API not supported');
+                results.push('Your browser does not support audio recording\n');
+            } else {
+                results.push('✅ MediaDevices API supported');
+            }
+            
+            if (!navigator.mediaDevices.getUserMedia) {
+                results.push('❌ getUserMedia not supported\n');
+            } else {
+                results.push('✅ getUserMedia supported');
+            }
+            
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioInputs = devices.filter(d => d.kind === 'audioinput');
+                
+                if (audioInputs.length === 0) {
+                    results.push('❌ No audio input devices found');
+                    results.push('Please connect a microphone\n');
+                } else {
+                    results.push(`✅ Found ${audioInputs.length} audio input device(s):`);
+                    audioInputs.forEach((d, i) => {
+                        results.push(`   ${i+1}. ${d.label || 'Unknown Device'}`);
+                    });
+                    results.push('');
+                }
+            } catch (e) {
+                results.push(`⚠️ Cannot enumerate devices: ${e.message}`);
+                results.push('This may mean permissions are not granted\n');
+            }
+            
+            results.push('Attempting to request microphone access...');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                results.push('✅ MICROPHONE ACCESS GRANTED');
+                results.push('Your microphone is working!\n');
+                
+                stream.getTracks().forEach(t => t.stop());
+                
+                results.push('NEXT STEPS:');
+                results.push('1. Click the blue microphone button');
+                results.push('2. Speak in Tamil for 2-3 seconds');
+                results.push('3. Release or press Space to submit');
+                
+            } catch (error) {
+                results.push(`❌ MICROPHONE ACCESS DENIED`);
+                results.push(`Error: ${error.name}`);
+                results.push(`Message: ${error.message}\n`);
+                
+                results.push('HOW TO FIX:');
+                if (error.name === 'NotAllowedError') {
+                    results.push('1. Click the lock icon in the address bar');
+                    results.push('2. Find "Microphone"');
+                    results.push('3. Change from "Block" to "Allow"');
+                    results.push('4. Refresh the page (Ctrl+R)');
+                    results.push('5. Try Test Microphone again');
+                } else if (error.name === 'NotFoundError') {
+                    results.push('1. Connect a microphone to your computer');
+                    results.push('2. Check Windows Settings → Privacy & Security → Microphone');
+                    results.push('3. Try Test Microphone again');
+                } else if (error.name === 'PermissionDenied') {
+                    results.push('1. Go to Windows Settings');
+                    results.push('2. Privacy & Security → Microphone');
+                    results.push('3. Enable "Microphone access"');
+                    results.push('4. Scroll down and allow for your browser');
+                    results.push('5. Refresh page and try again');
+                }
+            }
+            
+            const diagnosticOutput = results.join('\n');
+            console.log(diagnosticOutput);
+            showError(diagnosticOutput);
+        }
+
+        diagnoseBtn.addEventListener('click', testMicrophone);
+
+        // ============ INITIALIZATION ============
+        console.log('Tamil Voice Assistant loaded with native WAV encoding.');
+    </script>
+</body>
+</html>
