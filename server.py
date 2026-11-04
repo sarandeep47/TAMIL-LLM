@@ -7,10 +7,15 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
+from pydantic import BaseModel
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============ REQUEST MODELS ============
+class ChatRequest(BaseModel):
+    text: str
 
 # ============ CONFIGURATION ============
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
@@ -59,15 +64,13 @@ def load_wav_to_numpy(audio_bytes: bytes) -> np.ndarray:
 
 
 def transcribe_audio_array(audio_array: np.ndarray):
-    """Transcribe float32 NumPy audio array using Faster-Whisper with balanced prompt."""
+    """Transcribe float32 NumPy audio array using Faster-Whisper with minimal prompt."""
     try:
         start_time = time.time()
         
-        # Priming Whisper with full reciprocal colloquial Tamil vocabulary
-        tamil_prompt = (
-            "வணக்கம், எப்படி இருக்கீங்க? நான் நல்லா இருக்கேன், ரொம்ப நன்றி. "
-            "எனக்கு ஒரு கேப் புக் பண்ணனும், கார் வேணும், பிக்கப் லொகேஷன் சொல்லுங்க."
-        )
+        # Minimal prompt to avoid hallucination
+        # Just basic Tamil words, no full sentences
+        tamil_prompt = "வணக்கம், நன்றி, கேப், கார், இருக்கேன்"
 
         segments, _ = whisper_model.transcribe(
             audio_array,
@@ -77,12 +80,18 @@ def transcribe_audio_array(audio_array: np.ndarray):
             best_of=2,
             temperature=0.0,
             condition_on_previous_text=False,
-            repetition_penalty=1.1,
+            repetition_penalty=1.2,  # Increased to prevent repetition
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500, threshold=0.42)  # Optimal sweet spot
+            vad_parameters=dict(min_silence_duration_ms=500, threshold=0.42)
         )
 
         text = "".join([segment.text for segment in segments]).strip()
+        
+        # Additional hallucination filter
+        # If result is too repetitive or too long for the audio, flag it
+        if text.count(text.split()[0] if text.split() else '') > len(text.split()) * 0.5:
+            logger.warning(f"Possible hallucination detected: {text}")
+        
         latency = round((time.time() - start_time) * 1000)
         logger.info(f"[STT Latency: {latency}ms] Transcribed: '{text}'")
         return text, latency
@@ -176,6 +185,34 @@ async def health_check():
         "ollama": check_ollama_health(),
         "whisper": check_whisper_health()
     }
+
+
+@app.post("/api/chat")
+async def chat_text(request: ChatRequest):
+    """
+    Process text input directly (without voice).
+    Useful for text-only chatting.
+    """
+    try:
+        user_text = request.text.strip()
+        
+        if not user_text:
+            raise HTTPException(status_code=400, detail="Empty message")
+        
+        # Query Qwen on Ollama
+        bot_text, llm_latency = ask_ollama(user_text)
+        
+        return {
+            "user_text": user_text,
+            "bot_text": bot_text,
+            "llm_latency_ms": llm_latency,
+            "stt_latency_ms": 0  # No STT for text input
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Chat error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 @app.post("/api/voice-turn")

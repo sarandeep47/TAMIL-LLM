@@ -69,28 +69,55 @@ export const ChatPage: React.FC = () => {
       addMessage(loadingMessage);
       setLoading(true);
 
-      // For now, we'll add a simple response
-      // In the future, you can integrate with a text-based LLM API if available
-      const response = `I received your message: "${text}". 
+      // Send text to backend LLM using POST /api/chat
+      const response = await fetch('http://localhost:8000/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: text.trim() }),
+      });
 
-To use my full capabilities, please use the voice input feature which connects to the Tamil Voice Assistant backend for STT, LLM, and TTS processing.
+      if (!response.ok) {
+        throw new Error(`Backend error: ${response.status}`);
+      }
 
-**Tips:**
-- Click the microphone button to speak
-- I support Tamil and English
-- Use voice for a more natural conversation experience`;
+      const data = await response.json();
+
+      // Remove loading message
+      const currentConv = getCurrentConversation();
+      if (currentConv) {
+        currentConv.messages = currentConv.messages.filter(m => !m.isLoading);
+      }
 
       // Add AI response
       const aiMessage: Message = {
         id: (Date.now() + 2).toString(),
         role: 'assistant',
-        content: response,
+        content: data.bot_text || 'No response',
         timestamp: new Date(),
+        llmLatency: data.llm_latency_ms,
       };
       addMessage(aiMessage);
+
+      // Play response audio
+      if (data.bot_text) {
+        try {
+          await voiceService.playText(data.bot_text, 0.7);
+        } catch (ttsErr) {
+          console.warn('TTS failed:', ttsErr);
+        }
+      }
     } catch (err) {
+      console.error('Send message error:', err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to send message';
       setError(errorMessage);
+
+      // Remove loading message
+      const currentConv = getCurrentConversation();
+      if (currentConv) {
+        currentConv.messages = currentConv.messages.filter(m => !m.isLoading);
+      }
     } finally {
       setLoading(false);
     }
