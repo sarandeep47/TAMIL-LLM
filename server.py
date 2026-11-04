@@ -63,8 +63,11 @@ def transcribe_audio_array(audio_array: np.ndarray):
     try:
         start_time = time.time()
         
-        # Balanced prompt covering greetings, well-being, and cab booking
-        tamil_prompt = "வணக்கம், எப்படி இருக்கீங்க? நல்லா இருக்கேன். எனக்கு ஒரு கேப் புக் பண்ணனும், கார் வேணும், பிக்கப் லொகேஷன் சொல்லுங்க."
+        # Priming Whisper with full reciprocal colloquial Tamil vocabulary
+        tamil_prompt = (
+            "வணக்கம், எப்படி இருக்கீங்க? நான் நல்லா இருக்கேன், ரொம்ப நன்றி. "
+            "எனக்கு ஒரு கேப் புக் பண்ணனும், கார் வேணும், பிக்கப் லொகேஷன் சொல்லுங்க."
+        )
 
         segments, _ = whisper_model.transcribe(
             audio_array,
@@ -76,7 +79,7 @@ def transcribe_audio_array(audio_array: np.ndarray):
             condition_on_previous_text=False,
             repetition_penalty=1.1,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=600, threshold=0.4)
+            vad_parameters=dict(min_silence_duration_ms=500, threshold=0.35)
         )
 
         text = "".join([segment.text for segment in segments]).strip()
