@@ -53,3 +53,12 @@ models/
 # Environment variables
 .env
 .env.local
+# Step 3 and Step 4 artifacts
+*.csv
+*.bak
+.venv/
+node_modules/
+*.wav
+step3/old/
+step3/ollama_ps_*.txt
+step3/summary.md
