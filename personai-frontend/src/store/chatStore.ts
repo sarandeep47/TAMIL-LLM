@@ -11,6 +11,7 @@ interface ChatState {
   createConversation: () => void;
   selectConversation: (id: string) => void;
   addMessage: (message: Message) => void;
+  updateMessage: (conversationId: string, messageId: string, updater: (msg: Message) => Message) => void;
   deleteConversation: (id: string) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -57,6 +58,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ...conv,
             messages: [...conv.messages, message],
             title,
+            updatedAt: new Date(),
+          };
+        }
+        return conv;
+      });
+
+      return { conversations };
+    });
+  },
+
+  updateMessage: (conversationId: string, messageId: string, updater: (msg: Message) => Message) => {
+    set((state) => {
+      const conversations = state.conversations.map((conv) => {
+        if (conv.id === conversationId) {
+          return {
+            ...conv,
+            messages: conv.messages.map((msg) =>
+              msg.id === messageId ? updater(msg) : msg
+            ),
             updatedAt: new Date(),
           };
         }

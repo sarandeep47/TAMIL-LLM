@@ -1,16 +1,14 @@
 import axios from 'axios';
 import type { AxiosInstance } from 'axios';
 import type { VoiceResponseData, HealthStatus } from '../types/chat';
+import { API_BASE } from '../constants';
 
 class ApiClient {
   private client: AxiosInstance;
-  private baseURL: string;
 
   constructor() {
-    this.baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-    
     this.client = axios.create({
-      baseURL: this.baseURL,
+      baseURL: API_BASE,
       timeout: 120000,
       headers: {
         'Content-Type': 'application/json',
@@ -35,7 +33,7 @@ class ApiClient {
   // Health check
   async checkHealth(): Promise<HealthStatus> {
     try {
-      const response = await this.client.get('/api/health');
+      const response = await this.client.get('/health');
       return response.data;
     } catch (error) {
       console.error('Health check failed:', error);
@@ -50,7 +48,7 @@ class ApiClient {
       formData.append('file', audioBlob, 'audio.wav');
 
       const response = await this.client.post<VoiceResponseData>(
-        '/api/voice-turn',
+        '/voice-turn',
         formData,
         {
           headers: {
@@ -68,7 +66,7 @@ class ApiClient {
 
   // Get backend URL for reference
   getBaseURL(): string {
-    return this.baseURL;
+    return API_BASE;
   }
 }
 

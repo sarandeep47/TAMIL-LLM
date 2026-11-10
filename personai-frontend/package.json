@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:sse": "npx tsc --ignoreConfig --module commonjs --target es2020 --outDir dist-test src/sse.ts && node -e \"const fs=require('fs'); fs.renameSync('dist-test/sse.js', 'dist-test/sse.cjs')\" && node --test tests/sse.test.cjs tests/decode-chunks.test.cjs"
   },
   "dependencies": {
     "react": "^19.3.1",
