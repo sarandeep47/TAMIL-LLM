@@ -6,7 +6,10 @@ import requests
 import numpy as np
 import soundfile as sf
 import threading
+import io
 from datetime import datetime
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +20,7 @@ import logging
 from router import route_message
 from step4.streaming_utils import strip_role_prefix, SentenceSplitter
 from token_cleaner import TokenCleaner
+from stt.transcript_guard import check_transcript
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,6 +36,19 @@ PERSONAI_THREADS = int(os.getenv("PERSONAI_THREADS", "4"))
 MAX_SENTENCES = int(os.getenv("MAX_SENTENCES", "2"))
 PERSONAI_FAKE_STT_TEXT = os.getenv("PERSONAI_FAKE_STT_TEXT", None)  # Test-only override
 NO_SPEECH_REPLY = "மன்னிக்கவும், பேச்சு கேட்கப்படவில்லை."
+UNCLEAR_REPLY = "மன்னிக்கவும், சரியாகக் கேட்கவில்லை. மீண்டும் சொல்லுங்கள்?"
+
+# Whisper configuration
+PERSONAI_WHISPER_PROMPT = os.getenv("PERSONAI_WHISPER_PROMPT", "")  # Empty by default (no initial_prompt)
+PERSONAI_WHISPER_MODEL = os.getenv("PERSONAI_WHISPER_MODEL", "base")  # "base" or "small"
+PERSONAI_WHISPER_BEAM = int(os.getenv("PERSONAI_WHISPER_BEAM", "2"))
+
+# Audio capture
+PERSONAI_SAVE_AUDIO = os.getenv("PERSONAI_SAVE_AUDIO", "0") == "1"
+
+# ElevenLabs Scribe configuration
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", None)
+SCRIBE_ENABLED = ELEVENLABS_API_KEY is not None
 
 # Exact system prompt from Step 3
 SYSTEM_PROMPT = """You are a friendly Tamil voice assistant that helps people book cabs. Reply in one short, natural, correct spoken-Tamil sentence. If the user writes Tamil in English letters (Tanglish), understand it and reply in Tamil script. If the user writes English, reply in English. Ask for the pickup location, drop location or time when needed. If you do not know something, say so briefly. Never repeat the user's words back. Examples:
@@ -66,7 +83,7 @@ class ChatRequest(BaseModel):
 # ============ WHISPER INITIALIZATION ============
 logger.info("Initializing Faster-Whisper (optimized CPU settings)...")
 whisper_model = WhisperModel(
-    "base",
+    PERSONAI_WHISPER_MODEL,
     device="cpu",
     compute_type="int8",
     cpu_threads=4,
@@ -85,10 +102,136 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ============ AUDIO CAPTURE SETUP ============
+if PERSONAI_SAVE_AUDIO:
+    os.makedirs("audio_samples", exist_ok=True)
+    logger.info("Audio capture enabled: audio_samples/")
+
+
+def save_audio_sample(audio_bytes: bytes, transcript: str, stt_ms: int, model: str, prompt_used: str):
+    """Save audio sample and log metadata."""
+    if not PERSONAI_SAVE_AUDIO:
+        return
+    
+    try:
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        filename = f"audio_samples/{timestamp}.wav"
+        
+        with open(filename, "wb") as f:
+            f.write(audio_bytes)
+        
+        # Append JSON line to log
+        log_entry = {
+            "file": filename,
+            "transcript": transcript,
+            "stt_ms": stt_ms,
+            "model": model,
+            "prompt_used": prompt_used
+        }
+        
+        with open("audio_samples/log.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            f.flush()  # Ensure write is flushed immediately
+        
+        logger.info(f"Audio saved: {filename}")
+    except Exception as e:
+        logger.error(f"Audio capture error: {e}")
+
+
+def get_audio_rms(audio_array: np.ndarray) -> float:
+    """Calculate RMS (Root Mean Square) of audio array."""
+    if audio_array.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(audio_array ** 2)))
+
+
+def get_audio_duration(audio_array: np.ndarray, sample_rate: int = 16000) -> float:
+    """Calculate duration of audio in seconds."""
+    if sample_rate == 0:
+        return 0.0
+    return len(audio_array) / sample_rate
+
+
+def transcribe_scribe(audio_bytes: bytes) -> tuple:
+    """
+    Transcribe with ElevenLabs Scribe API.
+    Returns: (text, latency_ms) or (None, 0) on error
+    Never prints API key or headers.
+    """
+    if not SCRIBE_ENABLED:
+        return None, 0
+    
+    # Try language codes: ta (ISO 639-1) first, then tam (ISO 639-3) as fallback
+    language_codes = ["ta", "tam"]
+    
+    for attempt, lang_code in enumerate(language_codes):
+        try:
+            # Build multipart request
+            boundary = "----Boundary123"
+            body_parts = [
+                f"--{boundary}\r\n",
+                f'Content-Disposition: form-data; name="model_id"\r\n',
+                f"\r\n",
+                f"scribe_v2\r\n",
+                f"--{boundary}\r\n",
+                f'Content-Disposition: form-data; name="language_code"\r\n',
+                f"\r\n",
+                f"{lang_code}\r\n",
+                f"--{boundary}\r\n",
+                f'Content-Disposition: form-data; name="tag_audio_events"\r\n',
+                f"\r\n",
+                f"false\r\n",
+                f"--{boundary}\r\n",
+                f'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n',
+                f"Content-Type: audio/wav\r\n",
+                f"\r\n",
+            ]
+            body = "".join(body_parts).encode() + audio_bytes + f"\r\n--{boundary}--\r\n".encode()
+            
+            url = "https://api.elevenlabs.io/v1/speech-to-text"
+            req = Request(
+                url,
+                data=body,
+                headers={
+                    "xi-api-key": ELEVENLABS_API_KEY,
+                    "Content-Type": f"multipart/form-data; boundary={boundary}"
+                },
+                method="POST"
+            )
+            
+            start = time.time()
+            try:
+                with urlopen(req, timeout=10) as resp:
+                    latency_ms = int((time.time() - start) * 1000)
+                    result = json.loads(resp.read())
+                    text = result.get("text", "").strip()
+                    logger.info(f"Scribe transcribed: '{text}' ({latency_ms}ms)")
+                    return text, latency_ms
+            except HTTPError as e:
+                error_body = e.read().decode()
+                # If language code rejected, try next one
+                if "language" in error_body.lower() and attempt == 0:
+                    logger.debug(f"Scribe: language_code '{lang_code}' rejected, retrying with '{language_codes[1]}'")
+                    continue
+                else:
+                    logger.warning(f"Scribe HTTP {e.code}: {error_body[:100]}")
+                    return None, 0
+        except Exception as e:
+            if attempt == 0:
+                logger.debug(f"Scribe attempt 1 failed: {e}, retrying...")
+                continue
+            else:
+                logger.warning(f"Scribe transcription failed: {e}")
+                return None, 0
+    
+    return None, 0
+
 # ============ UTILITY FUNCTIONS ============
 
-def load_wav_to_numpy(audio_bytes: bytes) -> np.ndarray:
-    """Reads uncompressed 16kHz WAV bytes directly into a float32 NumPy array."""
+def load_wav_to_numpy(audio_bytes: bytes) -> tuple:
+    """Reads uncompressed 16kHz WAV bytes directly into a float32 NumPy array.
+    Returns: (audio_array, sample_rate)
+    """
     try:
         with io.BytesIO(audio_bytes) as audio_file:
             data, sample_rate = sf.read(audio_file, dtype="float32")
@@ -99,7 +242,7 @@ def load_wav_to_numpy(audio_bytes: bytes) -> np.ndarray:
         if len(data.shape) > 1:
             data = np.mean(data, axis=1)
 
-        return data
+        return data, sample_rate
     except Exception as e:
         logger.error(f"WAV parsing error: {e}")
         logger.error(f"Audio bytes size: {len(audio_bytes)}")
@@ -108,19 +251,15 @@ def load_wav_to_numpy(audio_bytes: bytes) -> np.ndarray:
 
 
 def transcribe_audio_array(audio_array: np.ndarray):
-    """Transcribe float32 NumPy audio array using Faster-Whisper with minimal prompt."""
+    """Transcribe float32 NumPy audio array using Faster-Whisper with configurable prompt."""
     try:
         start_time = time.time()
-        
-        # Minimal prompt to avoid hallucination
-        # Just basic Tamil words, no full sentences
-        tamil_prompt = "வணக்கம், நன்றி, கேப், கார், இருக்கேன்"
 
         segments, _ = whisper_model.transcribe(
             audio_array,
             language="ta",
-            initial_prompt=tamil_prompt,
-            beam_size=2,
+            initial_prompt=PERSONAI_WHISPER_PROMPT if PERSONAI_WHISPER_PROMPT else None,
+            beam_size=PERSONAI_WHISPER_BEAM,
             best_of=2,
             temperature=0.0,
             condition_on_previous_text=False,
@@ -432,7 +571,7 @@ async def voice_turn(file: UploadFile = File(...)):
         stt_latency = 0
         logger.info(f"[TEST OVERRIDE] Using PERSONAI_FAKE_STT_TEXT: {user_text}")
     else:
-        audio_array = await run_in_threadpool(load_wav_to_numpy, audio_bytes)
+        audio_array, sample_rate = await run_in_threadpool(load_wav_to_numpy, audio_bytes)
         if audio_array.size == 0:
             return {
                 "user_text": "",
@@ -441,16 +580,55 @@ async def voice_turn(file: UploadFile = File(...)):
                 "llm_latency_ms": 0,
                 "route": "silence"
             }
-        user_text, stt_latency = await run_in_threadpool(transcribe_audio_array, audio_array)
+        
+        # Check audio quality: skip if too short or too quiet
+        duration = get_audio_duration(audio_array, sample_rate)
+        rms = get_audio_rms(audio_array)
+        
+        if duration < 0.5 or rms < 0.005:
+            logger.info(f"Audio skipped: duration={duration:.2f}s, RMS={rms:.6f} (too short or too quiet)")
+            return {
+                "user_text": "",
+                "bot_text": "audio too quiet",
+                "stt_latency_ms": 0,
+                "llm_latency_ms": 0,
+                "route": "silence"
+            }
+        
+        # Try Scribe first, fall back to Whisper
+        user_text, stt_latency = await run_in_threadpool(transcribe_scribe, audio_bytes)
+        
+        if user_text is None:
+            # Scribe failed or not available, fall back to Whisper
+            logger.info("Scribe unavailable, falling back to Whisper")
+            user_text, stt_latency = await run_in_threadpool(transcribe_audio_array, audio_array)
+        else:
+            logger.info("Using Scribe for STT")
+    
+    # Save audio sample if enabled
+    await run_in_threadpool(save_audio_sample, audio_bytes, user_text or "", stt_latency, "scribe", "")
     
     if not user_text or len(user_text.strip()) < 2:
         total_ms = int((time.time() - start_time) * 1000)
         return {
-            "user_text": user_text,
+            "user_text": user_text or "",
             "bot_text": NO_SPEECH_REPLY,
             "stt_latency_ms": stt_latency,
             "llm_latency_ms": 0,
             "route": "silence"
+        }
+    
+    # Check for echo/loop patterns (transcript guard)
+    transcript_status = check_transcript(user_text)
+    if transcript_status in ("echo", "loop"):
+        logger.warning(f"Transcript guard triggered ({transcript_status}): '{user_text}'")
+        total_ms = int((time.time() - start_time) * 1000)
+        return {
+            "user_text": user_text,
+            "bot_text": UNCLEAR_REPLY,
+            "stt_latency_ms": stt_latency,
+            "llm_latency_ms": 0,
+            "route": "unclear"
         }
     
     # Try router first
@@ -601,13 +779,42 @@ async def voice_turn_stream(file: UploadFile = File(...)):
                 stt_latency = 0
                 logger.info(f"[TEST OVERRIDE] Using PERSONAI_FAKE_STT_TEXT: {user_text}")
             else:
-                audio_array = await run_in_threadpool(load_wav_to_numpy, audio_bytes)
-                user_text, stt_latency = await run_in_threadpool(transcribe_audio_array, audio_array)
+                audio_array, sample_rate = await run_in_threadpool(load_wav_to_numpy, audio_bytes)
+                
+                # Check audio quality: skip if too short or too quiet
+                duration = get_audio_duration(audio_array, sample_rate)
+                rms = get_audio_rms(audio_array)
+                
+                if duration < 0.5 or rms < 0.005:
+                    logger.info(f"Audio skipped: duration={duration:.2f}s, RMS={rms:.6f} (too short or too quiet)")
+                    reply = "audio too quiet"
+                    yield f'data: {json.dumps({"event": "done", "reply": reply, "ttft_ms": 0, "first_sentence_ms": 0, "total_ms": int((time.time() - request_start_time) * 1000), "route": "silence"})}\n\n'
+                    return
+                
+                # Try Scribe first, fall back to Whisper
+                user_text, stt_latency = await run_in_threadpool(transcribe_scribe, audio_bytes)
+                
+                if user_text is None:
+                    # Scribe failed or not available, fall back to Whisper
+                    logger.info("Scribe unavailable, falling back to Whisper")
+                    user_text, stt_latency = await run_in_threadpool(transcribe_audio_array, audio_array)
+                else:
+                    logger.info("Using Scribe for STT")
+            
+            # Save audio sample if enabled
+            await run_in_threadpool(save_audio_sample, audio_bytes, user_text or "", stt_latency, "scribe", "")
             
             logger.info(f"STT result: '{user_text}' ({stt_latency}ms)")
             
             # Emit STT event
             yield f'data: {json.dumps({"event": "stt", "user_text": user_text, "stt_latency_ms": stt_latency})}\n\n'
+            
+            # Check for echo/loop patterns (transcript guard)
+            transcript_status = check_transcript(user_text)
+            if transcript_status in ("echo", "loop"):
+                logger.warning(f"Transcript guard triggered ({transcript_status}): '{user_text}'")
+                yield f'data: {json.dumps({"event": "done", "reply": UNCLEAR_REPLY, "ttft_ms": 0, "first_sentence_ms": 0, "total_ms": int((time.time() - request_start_time) * 1000), "route": "unclear"})}\n\n'
+                return
             
             if not user_text or len(user_text.strip()) < 2:
                 # No speech
@@ -635,7 +842,7 @@ async def voice_turn_stream(file: UploadFile = File(...)):
                 # Stream response without blocking event loop
                 stream_obj = ask_ollama_stream(user_text)
                 try:
-                    async for chunk in iterate_in_threadpool(stream_obj):
+                    async for chunk in iterate_in_threadpool(iter(stream_obj)):
                         if first_token_time is None:
                             first_token_time = time.time()
                         
