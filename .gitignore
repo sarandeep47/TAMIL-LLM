@@ -74,3 +74,4 @@ tamil_fallback_strings.txt
 server_backup.py
 server_original.py
 dialogue_test_*.txt
+config.py
