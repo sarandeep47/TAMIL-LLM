@@ -32,15 +32,15 @@ def test_places():
     """Test place parsing."""
     tests = [
         # (input, expected_pickup, expected_drop, expected_bare, expected_vague)
-        ("naa chennai ponnum", None, "\u0B9A\u0BC6\u0BA9\u0BC8", None, False),  # Chennai
+        ("naa chennai ponnum", None, "\u0B9A\u0BC6\u0BA9\u0BCD\u0BA9\u0BC8", None, False),  # Chennai
         ("kk nagar poganum", None, "\u0B95\u0BC7.\u0B95\u0BC7. \u0BA8\u0B95\u0BB0\u0BCD", None, False),  # KK Nagar
         ("naa trichy pognum", None, "\u0BA4\u0BBF\u0BB0\u0BC1\u0B9A\u0BCD\u0B9A\u0BBF", None, False),  # Trichy
         ("thrichy la irundhu poganum", "\u0BA4\u0BBF\u0BB0\u0BC1\u0B9A\u0BCD\u0B9A\u0BBF", None, None, False),  # Trichy
         ("Madurai la iruken", "\u0BAE\u0BA4\u0BC1\u0BB0\u0BC8", None, None, False),  # Madurai
-        ("teppakulam poganum", None, "\u0BA4\u0BC6\u0BCD\u0BAA\u0BCD\u0BAA\u0B95\u0BCD\u0B95\u0BC1\u0BB3\u0BAE\u0BCD", None, False),  # Teppakulam
-        ("airport ku poganum", None, "\u0BB5\u0BBF\u0BAE\u0BBE\u0BA3 \u0BA8\u0BBF\u0BB2\u0BC8\u0BAF\u0BAE\u0BCD", None, False),  # Airport
+        ("teppakulam poganum", None, "\u0BA4\u0BC6\u0BAA\u0BCD\u0BAA\u0B95\u0BCD\u0B95\u0BC1\u0BB3\u0BAE\u0BCD", None, False),  # Teppakulam
+        ("airport ku poganum", None, "\u0BB5\u0BBF\u0BAE\u0BBE\u0BA9 \u0BA8\u0BBF\u0BB2\u0BC8\u0BAF\u0BAE\u0BCD", None, False),  # Airport
         ("madurai railway station ku poganum", None, "\u0BAE\u0BA4\u0BC1\u0BB0\u0BC8 \u0BB0\u0BAF\u0BBF\u0BB2\u0BCD \u0BA8\u0BBF\u0BB2\u0BC8\u0BAF\u0BAE\u0BCD", None, False),  # Madurai Railway Station
-        ("from anna nagar to airport", "\u0B85\u0BA3\u0BC8 \u0BA8\u0B95\u0BB0\u0BCD", "\u0BB5\u0BBF\u0BAE\u0BBE\u0BA3 \u0BA8\u0BBF\u0BB2\u0BC8\u0BAF\u0BAE\u0BCD", None, False),  # Anna Nagar -> Airport
+        ("from anna nagar to airport", "\u0B85\u0BA3\u0BCD\u0BA3\u0BBE \u0BA8\u0B95\u0BB0\u0BCD", "\u0BB5\u0BBF\u0BAE\u0BBE\u0BA9 \u0BA8\u0BBF\u0BB2\u0BC8\u0BAF\u0BAE\u0BCD", None, False),  # Anna Nagar -> Airport
         ("location trichy", None, None, "\u0BA4\u0BBF\u0BB0\u0BC1\u0B9A\u0BCD\u0B9A\u0BBF", False),  # Trichy
         ("madurai la irundhu trichy ku", "\u0BAE\u0BA4\u0BC1\u0BB0\u0BC8", "\u0BA4\u0BBF\u0BB0\u0BC1\u0B9A\u0BCD\u0B9A\u0BBF", None, False),  # Madurai -> Trichy
         ("ila trichy la irundhu madurai ku poganum", "\u0BA4\u0BBF\u0BB0\u0BC1\u0B9A\u0BCD\u0B9A\u0BBF", "\u0BAE\u0BA4\u0BC1\u0BB0\u0BC8", None, False),  # Trichy -> Madurai
@@ -224,8 +224,55 @@ def test_endings():
     return passed, failed, failures
 
 
+def test_lexicon_vs_place_names():
+    """Check that every display name in lexicon is in PLACE_NAMES.txt and vice versa."""
+    from dialogue_parse import PLACES
+    
+    # Read PLACE_NAMES.txt
+    try:
+        with open("PLACE_NAMES.txt", "r", encoding="utf-8") as f:
+            place_names_content = f.read().strip()
+    except FileNotFoundError:
+        print("FAIL lexicon: PLACE_NAMES.txt not found")
+        return 0, 1, [("PLACE_NAMES.txt", "exists", "not found")]
+    
+    place_names_lines = {line.strip() for line in place_names_content.split("\n") if line.strip()}
+    
+    # Get all Tamil display names from PLACES dict
+    lexicon_names = set(PLACES.keys())
+    
+    # Check for mismatches
+    mismatches = []
+    
+    # Check lexicon names not in PLACE_NAMES.txt
+    in_lexicon_not_in_file = lexicon_names - place_names_lines
+    if in_lexicon_not_in_file:
+        for name in sorted(in_lexicon_not_in_file):
+            mismatches.append(("IN LEXICON NOT IN FILE", name))
+    
+    # Check PLACE_NAMES.txt lines not in lexicon
+    in_file_not_in_lexicon = place_names_lines - lexicon_names
+    if in_file_not_in_lexicon:
+        for name in sorted(in_file_not_in_lexicon):
+            mismatches.append(("IN FILE NOT IN LEXICON", name))
+    
+    if mismatches:
+        print(f"FAIL lexicon: {len(mismatches)} mismatch(es)")
+        for mtype, name in mismatches:
+            print(f"  {mtype}: {repr(name)}")
+        return 0, 1, [("lexicon_vs_place_names", "match", f"{len(mismatches)} mismatches")]
+    else:
+        print(f"PASS lexicon: all {len(lexicon_names)} names match")
+        return 1, 0, []
+
+
 def main():
     print("=" * 80)
+    print("Checking lexicon vs PLACE_NAMES.txt")
+    print("=" * 80)
+    p0, f0, fail0 = test_lexicon_vs_place_names()
+    
+    print("\n" + "=" * 80)
     print("Testing place parsing")
     print("=" * 80)
     p1, f1, fail1 = test_places()
@@ -245,9 +292,9 @@ def main():
     print("=" * 80)
     p4, f4, fail4 = test_endings()
     
-    total_passed = p1 + p2 + p3 + p4
-    total_failed = f1 + f2 + f3 + f4
-    all_failures = fail1 + fail2 + fail3 + fail4
+    total_passed = p0 + p1 + p2 + p3 + p4
+    total_failed = f0 + f1 + f2 + f3 + f4
+    all_failures = fail0 + fail1 + fail2 + fail3 + fail4
     
     print("\n" + "=" * 80)
     print("SUMMARY")

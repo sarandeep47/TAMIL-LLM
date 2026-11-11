@@ -45,7 +45,11 @@ def test_group_a():
         print("PASS A2: naa chennai ponnum -> drop, asks pickup")
         passed += 1
     else:
-        print(f"FAIL A2: naa chennai ponnum -> expected drop in reply, got {result}")
+        print(f"FAIL A2: naa chennai ponnum -> expected drop in reply")
+        print(f"  Input: 'naa chennai ponnum'")
+        print(f"  Expected: Chennai in reply")
+        print(f"  Actual reply: {ascii(result.reply) if result else None}")
+        print(f"  State: {ascii(state)}")
         failed += 1
     
     # chennai -> asks pickup again
@@ -196,7 +200,12 @@ def test_group_e():
         print("PASS E2: Explicit pattern corrects slots")
         passed += 1
     else:
-        print(f"FAIL E2: -> expected correction, got {state.pickup}")
+        print(f"FAIL E2: ila trichy la irundhu madurai ku poganum -> expected Trichy as pickup")
+        print(f"  Input: 'ila trichy la irundhu madurai ku poganum'")
+        print(f"  Expected pickup: Trichy")
+        print(f"  Actual pickup: {ascii(state.pickup)}")
+        print(f"  Actual drop: {ascii(state.drop)}")
+        print(f"  State: {ascii(state)}")
         failed += 1
     
     return passed, failed
@@ -210,11 +219,16 @@ def test_group_f():
     # F1: today, 9pm
     state = DialogueState()
     result = handle(state, "inniki raathri 9 mani ku cab venum")
-    if result and "9" in str(result):
+    if result and state.date == "today" and state.hour == 9 and state.ampm == "pm":
         print("PASS F1: inniki raathri 9 mani ku -> today, 9pm")
         passed += 1
     else:
-        print(f"FAIL F1: -> got {result}")
+        print(f"FAIL F1: inniki raathri 9 mani ku -> expected today 9pm")
+        print(f"  Input: 'inniki raathri 9 mani ku cab venum'")
+        print(f"  Expected: date='today', hour=9, ampm='pm'")
+        print(f"  Actual: date={ascii(state.date)}, hour={ascii(state.hour)}, ampm={ascii(state.ampm)}")
+        print(f"  Reply: {ascii(result.reply) if result else None}")
+        print(f"  State: {ascii(state)}")
         failed += 1
     
     # F2: immediate
