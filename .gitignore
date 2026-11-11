@@ -45,6 +45,9 @@ logs/
 *.tmp
 *.temp
 .cache/
+audio_samples/
+stt/references.csv
+stt/stt_results.csv
 
 # Ollama models (large files)
 ollama/

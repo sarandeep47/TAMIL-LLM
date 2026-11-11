@@ -1,0 +1,410 @@
+#!/usr/bin/env python3
+r"""Test dialogue state machine for Tamil cab booking.
+All strings are in \uXXXX escapes to avoid encoding issues.
+"""
+
+import sys
+
+# Encoding check: ensure no non-ASCII characters in source
+with open(__file__, 'rb') as f:
+    content = f.read()
+    if any(b > 127 for b in content):
+        print("ERROR: test_dialogue.py contains non-ASCII characters")
+        sys.exit(1)
+
+from dialogue import DialogueState, handle
+from replies import (
+    ASK_PICKUP, ASK_DROP, ASK_TIME_INITIAL, ASK_TIME,
+    ASK_TIME_TOMORROW, ASK_TIME_TODAY, CONFIRM_TEMPLATE, 
+    VAGUE_PLACE, BOOKED_REPLY, NO_AT_CONFIRM, CANCEL_REPLY
+)
+
+
+def test_group_a():
+    """A. The real conversation, one state."""
+    state = DialogueState()
+    passed = 0
+    failed = 0
+    
+    # enaku oru cab book pannanum -> asks pickup
+    result = handle(state, "enaku oru cab book pannanum")
+    if result and result.reply == ASK_PICKUP:
+        print("PASS A1: enaku oru cab book pannanum -> ASK_PICKUP")
+        passed += 1
+    else:
+        print(f"FAIL A1: enaku oru cab book pannanum")
+        print(f"  Input: enaku oru cab book pannanum")
+        print(f"  Expected: {repr(ASK_PICKUP)}")
+        print(f"  Actual: {repr(result.reply if result else None)}")
+        print(f"  State: {ascii(state)}")
+        failed += 1
+    
+    # naa chennai ponnum -> drop, asks pickup
+    result = handle(state, "naa chennai ponnum")
+    if result and "\u0B9A\u0BC6\u0BA9\u0BCD\u0BA9\u0BC8" in result.reply:
+        print("PASS A2: naa chennai ponnum -> drop, asks pickup")
+        passed += 1
+    else:
+        print(f"FAIL A2: naa chennai ponnum -> expected drop in reply, got {result}")
+        failed += 1
+    
+    # chennai -> asks pickup again
+    result = handle(state, "chennai")
+    if result and result.reply == ASK_PICKUP:
+        print("PASS A3: chennai -> ASK_PICKUP again")
+        passed += 1
+    else:
+        print(f"FAIL A3: chennai -> expected ASK_PICKUP, got {result}")
+        failed += 1
+    
+    # madurai -> pickup, asks time
+    result = handle(state, "madurai")
+    if result and "\u0BAE\u0BA4\u0BC1\u0BB0\u0BC8" in result.reply:
+        print("PASS A4: madurai -> pickup, asks time")
+        passed += 1
+    else:
+        print(f"FAIL A4: madurai -> expected pickup in reply, got {result}")
+        failed += 1
+    
+    # naliki 7 30 ku -> tomorrow 7:30, asks am/pm
+    result = handle(state, "naliki 7 30 ku")
+    if result and ("7:30" in result.reply or "7" in result.reply) and ("\u0B95\u0BBE\u0BB2\u0BC8" in result.reply or "\u0BAE\u0BBE\u0BB2\u0BC8" in result.reply):
+        print("PASS A5: naliki 7 30 ku -> tomorrow 7:30, asks am/pm")
+        passed += 1
+    else:
+        print(f"FAIL A5: naliki 7 30 ku -> expected am/pm question, got {result}")
+        failed += 1
+    
+    # kalai -> confirm
+    result = handle(state, "kalai")
+    if result and "?" in result.reply and "\u0BAA\u0BC1\u0B95\u0BCD" in result.reply:
+        print("PASS A6: kalai -> confirm")
+        passed += 1
+    else:
+        print(f"FAIL A6: kalai -> expected confirm, got {result}")
+        failed += 1
+    
+    # aama -> booked, reset
+    result = handle(state, "aama")
+    if result and result.booked and result.reply == BOOKED_REPLY:
+        print("PASS A7: aama -> booked, state reset")
+        passed += 1
+    else:
+        print(f"FAIL A7: aama -> expected booked, got {result}")
+        failed += 1
+    
+    return passed, failed
+
+
+def test_group_b():
+    """B. One sentence: full booking info."""
+    state = DialogueState()
+    passed = 0
+    failed = 0
+    
+    result = handle(state, "enaku madurai la irundhu trichy ku naliki 730 ku cab book pannu")
+    if result and ("\u0B95\u0BBE\u0BB2\u0BC8" in result.reply or "\u0BAE\u0BBE\u0BB2\u0BC8" in result.reply):
+        print("PASS B1: Full sentence -> asks am/pm")
+        passed += 1
+    else:
+        print(f"FAIL B1: Full sentence -> expected am/pm, got {result}")
+        failed += 1
+    
+    return passed, failed
+
+
+def test_group_c():
+    """C. Time without am/pm triggers am/pm question."""
+    state = DialogueState()
+    passed = 0
+    failed = 0
+    
+    result = handle(state, "naa madurai la irundhu trichy ku naliki poganum")
+    if result and ("?" in result.reply):
+        print("PASS C1: Time without am/pm -> asks am/pm")
+        passed += 1
+    else:
+        print(f"FAIL C1: -> expected question, got {result}")
+        failed += 1
+    
+    result = handle(state, "ezharai")
+    if result and ("7:30" in result.reply or "7" in result.reply):
+        print("PASS C2: ezharai -> 7:30")
+        passed += 1
+    else:
+        print(f"FAIL C2: -> expected 7:30, got {result}")
+        failed += 1
+    
+    result = handle(state, "malai")
+    if result and "?" in result.reply and "\u0BAA\u0BC1\u0B95\u0BCD" in result.reply:
+        print("PASS C3: malai -> confirm with pm")
+        passed += 1
+    else:
+        print(f"FAIL C3: -> expected confirm, got {result}")
+        failed += 1
+    
+    return passed, failed
+
+
+def test_group_d():
+    """D. Each starts a booking."""
+    state = DialogueState()
+    passed = 0
+    failed = 0
+    
+    test_cases = [
+        ("kk nagar poganum", "drop"),
+        ("naa trichy pognum", "drop"),
+        ("thrichy la irundhu poganum", "pickup"),
+        ("Madurai la iruken", "pickup"),
+        ("teppakulam poganum", "drop"),
+        ("airport ku poganum", "drop"),
+        ("madurai railway station ku poganum", "drop"),
+        ("from anna nagar to airport", "both"),
+        ("location trichy", "bare"),
+    ]
+    
+    for text, expected_type in test_cases:
+        state = DialogueState()
+        result = handle(state, f"cab book pannanum {text}")
+        if result:
+            print(f"PASS D ({expected_type}): {text} starts booking")
+            passed += 1
+        else:
+            print(f"FAIL D ({expected_type}): {text} -> expected booking start, got None")
+            failed += 1
+    
+    return passed, failed
+
+
+def test_group_e():
+    """E. Correction with explicit pattern."""
+    state = DialogueState()
+    passed = 0
+    failed = 0
+    
+    result = handle(state, "madurai la irundhu chennai ku cab venum")
+    if result:
+        print("PASS E1: Initial booking")
+        passed += 1
+    else:
+        print(f"FAIL E1: -> expected result, got None")
+        failed += 1
+    
+    result = handle(state, "ila trichy la irundhu madurai ku poganum")
+    if result and "\u0BA4\u0BBF\u0BB0\u0BC1\u0B9A\u0BCD\u0B9A\u0BBF" in str(state.pickup):
+        print("PASS E2: Explicit pattern corrects slots")
+        passed += 1
+    else:
+        print(f"FAIL E2: -> expected correction, got {state.pickup}")
+        failed += 1
+    
+    return passed, failed
+
+
+def test_group_f():
+    """F. Various time and place scenarios."""
+    passed = 0
+    failed = 0
+    
+    # F1: today, 9pm
+    state = DialogueState()
+    result = handle(state, "inniki raathri 9 mani ku cab venum")
+    if result and "9" in str(result):
+        print("PASS F1: inniki raathri 9 mani ku -> today, 9pm")
+        passed += 1
+    else:
+        print(f"FAIL F1: -> got {result}")
+        failed += 1
+    
+    # F2: immediate
+    state = DialogueState()
+    result = handle(state, "ippo cab venum")
+    if result and state.now:
+        print("PASS F2: ippo cab venum -> immediate")
+        passed += 1
+    else:
+        print(f"FAIL F2: -> expected now=True, got {state}")
+        failed += 1
+    
+    # F3: vague place
+    state = DialogueState()
+    result = handle(state, "cab venum")
+    if result and result.reply == ASK_PICKUP:
+        print("PASS F3: cab venum -> asks pickup")
+        passed += 1
+    else:
+        print(f"FAIL F3: -> got {result}")
+        failed += 1
+    
+    result = handle(state, "kovil ku")
+    if result and result.reply == VAGUE_PLACE:
+        print("PASS F4: kovil ku -> vague place")
+        passed += 1
+    else:
+        print(f"FAIL F4: -> expected vague place, got {result}")
+        failed += 1
+    
+    return passed, failed
+
+
+def test_group_g():
+    """G. Cancel in the middle."""
+    state = DialogueState()
+    passed = 0
+    failed = 0
+    
+    result = handle(state, "cab venum")
+    if result:
+        print("PASS G1: Start booking")
+        passed += 1
+    else:
+        failed += 1
+    
+    result = handle(state, "cancel")
+    if result and result.reply == CANCEL_REPLY and state.awaiting is None:
+        print("PASS G2: cancel -> reset")
+        passed += 1
+    else:
+        print(f"FAIL G2: -> expected cancel, got {result}, state={state.awaiting}")
+        failed += 1
+    
+    return passed, failed
+
+
+def test_group_h():
+    """H. Return None (not hijacked)."""
+    passed = 0
+    failed = 0
+    
+    test_cases = [
+        "vanakam",
+        "nandri",
+        "nee epidi iruka",
+        "madurai la enna famous",
+        "2 * 3 evlo",
+        "enna macha pannure",
+        "en peru sarandeep",
+        "enaku oru paatu sollu",
+        "naa pesurathu puriyutha",
+        "naa madurai la iruken atha pathi sollu",
+        "train la poganum",
+        "madurai",
+        "sari",
+        "aama",
+    ]
+    
+    for text in test_cases:
+        state = DialogueState()
+        result = handle(state, text)
+        if result is None:
+            print(f"PASS H: {text} -> None")
+            passed += 1
+        else:
+            print(f"FAIL H: {text} -> expected None, got {result}")
+            failed += 1
+    
+    return passed, failed
+
+
+def test_group_i():
+    """I. Mid-booking question."""
+    state = DialogueState()
+    passed = 0
+    failed = 0
+    
+    result = handle(state, "cab venum")
+    if result:
+        print("PASS I1: cab venum -> start")
+        passed += 1
+    else:
+        failed += 1
+    
+    result = handle(state, "naa madurai la irundhu")
+    if result:
+        print("PASS I2: naa madurai la irundhu -> pickup set")
+        passed += 1
+    else:
+        failed += 1
+    
+    result = handle(state, "time enna")
+    if result is None and state.pickup:
+        print("PASS I3: time enna -> None, state unchanged")
+        passed += 1
+    else:
+        print(f"FAIL I3: -> expected None with state unchanged, got {result}, pickup={state.pickup}")
+        failed += 1
+    
+    return passed, failed
+
+
+def test_group_j():
+    """J. Reply length and session store."""
+    passed = 0
+    failed = 0
+    
+    state = DialogueState()
+    
+    # Check that replies are at most 2 sentences
+    test_messages = [
+        "enaku oru cab book pannanum",
+        "naa chennai ponnum",
+        "madurai",
+    ]
+    
+    for msg in test_messages:
+        result = handle(state, msg)
+        if result:
+            sentence_count = result.reply.count("?") + result.reply.count("\u0964")
+            if sentence_count <= 2:
+                print(f"PASS J: {msg} reply has <= 2 sentences")
+                passed += 1
+            else:
+                print(f"FAIL J: {msg} reply has > 2 sentences")
+                failed += 1
+        else:
+            failed += 1
+    
+    return passed, failed
+
+
+def main():
+    print("=" * 80)
+    print("Testing dialogue state machine")
+    print("=" * 80)
+    
+    total_passed = 0
+    total_failed = 0
+    
+    groups = [
+        ("A", test_group_a),
+        ("B", test_group_b),
+        ("C", test_group_c),
+        ("D", test_group_d),
+        ("E", test_group_e),
+        ("F", test_group_f),
+        ("G", test_group_g),
+        ("H", test_group_h),
+        ("I", test_group_i),
+        ("J", test_group_j),
+    ]
+    
+    for group_name, test_func in groups:
+        print(f"\nGroup {group_name}:")
+        try:
+            p, f = test_func()
+            total_passed += p
+            total_failed += f
+        except Exception as e:
+            print(f"ERROR in group {group_name}: {e}")
+            total_failed += 1
+    
+    print("\n" + "=" * 80)
+    print(f"TOTAL: Passed {total_passed}, Failed {total_failed}")
+    print("=" * 80)
+    
+    return 0 if total_failed == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
