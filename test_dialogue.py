@@ -208,6 +208,34 @@ def test_group_e():
         print(f"  State: {ascii(state)}")
         failed += 1
     
+    # E3: Override when awaiting=drop
+    state2 = DialogueState()
+    handle(state2, "kk nagar poganum")
+    result = handle(state2, "naa trichy la irundhu madurai ku poganum")
+    if result and state2.pickup == "\u0BA4\u0BBF\u0BB0\u0BC1\u0B9A\u0BCD\u0B9A\u0BBF" and state2.drop == "\u0BAE\u0BA4\u0BC1\u0BB0\u0BC8":
+        print("PASS E3: Override after drop sets pickup and drop")
+        passed += 1
+    else:
+        print(f"FAIL E3: naa trichy la irundhu madurai ku poganum -> expected pickup=Trichy, drop=Madurai")
+        print(f"  Actual pickup: {ascii(state2.pickup)}")
+        print(f"  Actual drop: {ascii(state2.drop)}")
+        failed += 1
+    
+    # E4: Override when awaiting=confirm
+    state3 = DialogueState()
+    handle(state3, "madurai la irundhu chennai ku cab venum")
+    handle(state3, "naliki 7 30 ku")
+    handle(state3, "kalai")
+    # Now in confirm state, override drop only
+    result = handle(state3, "illa madurai ku poganum")
+    if result and state3.drop == "\u0BAE\u0BA4\u0BC1\u0BB0\u0BC8":
+        print("PASS E4: Override in confirm state changes drop only")
+        passed += 1
+    else:
+        print(f"FAIL E4: illa madurai ku poganum -> expected drop=Madurai")
+        print(f"  Actual drop: {ascii(state3.drop)}")
+        failed += 1
+    
     return passed, failed
 
 

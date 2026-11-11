@@ -267,7 +267,14 @@ def handle(state: DialogueState, text: str) -> Optional[Result]:
             return Result(reply=ASK_PICKUP, intent="booking")
     
     if state.awaiting == "pickup":
-        if places_result["bare"]:
+        # Check for explicit pattern with both pickup and drop
+        if places_result["pickup"] and places_result["drop"]:
+            state.pickup = places_result["pickup"]
+            state.drop = places_result["drop"]
+            state.awaiting = "time"
+            ack = ACK_BOTH_TEMPLATE.format(pickup=_loc(state.pickup), drop=_dat(state.drop))
+            return Result(reply=ack + ASK_TIME_INITIAL, intent="booking")
+        elif places_result["bare"]:
             if places_result["bare"] == state.drop:
                 return Result(reply=ASK_PICKUP, intent="booking")
             state.pickup = places_result["bare"]
@@ -307,7 +314,14 @@ def handle(state: DialogueState, text: str) -> Optional[Result]:
             return Result(reply=ASK_PICKUP, intent="booking")
     
     if state.awaiting == "drop":
-        if places_result["bare"]:
+        # Check for explicit pattern with both pickup and drop
+        if places_result["pickup"] and places_result["drop"]:
+            state.pickup = places_result["pickup"]
+            state.drop = places_result["drop"]
+            state.awaiting = "time"
+            ack = ACK_BOTH_TEMPLATE.format(pickup=_loc(state.pickup), drop=_dat(state.drop))
+            return Result(reply=ack + ASK_TIME_INITIAL, intent="booking")
+        elif places_result["bare"]:
             if places_result["bare"] == state.pickup:
                 return Result(reply=ASK_DROP, intent="booking")
             state.drop = places_result["bare"]
@@ -326,6 +340,24 @@ def handle(state: DialogueState, text: str) -> Optional[Result]:
             return Result(reply=ASK_DROP, intent="booking")
     
     if state.awaiting == "time":
+        # Check for explicit place pattern that overrides current booking
+        if places_result.get("pickup") or places_result.get("drop"):
+            # Explicit pattern found - overwrite slots
+            if places_result.get("pickup"):
+                state.pickup = places_result["pickup"]
+            if places_result.get("drop"):
+                state.drop = places_result["drop"]
+            # After overwrite, stay in time-awaiting or ask for missing slots
+            if state.pickup and state.drop:
+                state.awaiting = "time"
+                return Result(reply=ASK_TIME_INITIAL, intent="booking")
+            elif state.pickup and not state.drop:
+                state.awaiting = "drop"
+                return Result(reply=ASK_DROP, intent="booking")
+            elif state.drop and not state.pickup:
+                state.awaiting = "pickup"
+                return Result(reply=ASK_PICKUP, intent="booking")
+        
         if time_result.get("now"):
             state.now = True
             state.awaiting = "ampm"
@@ -351,6 +383,24 @@ def handle(state: DialogueState, text: str) -> Optional[Result]:
             return Result(reply=ASK_TIME_INITIAL, intent="booking")
     
     if state.awaiting == "ampm":
+        # Check for explicit place pattern that overrides current booking
+        if places_result.get("pickup") or places_result.get("drop"):
+            # Explicit pattern found - overwrite slots
+            if places_result.get("pickup"):
+                state.pickup = places_result["pickup"]
+            if places_result.get("drop"):
+                state.drop = places_result["drop"]
+            # After overwrite, stay in ampm-awaiting or ask for missing slots
+            if state.pickup and state.drop:
+                state.awaiting = "ampm"
+                return Result(reply=ASK_AMPM_TEMPLATE.format(time=_format_time(state.hour or 12, state.minute or 0, None)), intent="booking")
+            elif state.pickup and not state.drop:
+                state.awaiting = "drop"
+                return Result(reply=ASK_DROP, intent="booking")
+            elif state.drop and not state.pickup:
+                state.awaiting = "pickup"
+                return Result(reply=ASK_PICKUP, intent="booking")
+        
         if time_result.get("ampm"):
             state.ampm = time_result["ampm"]
             state.awaiting = "confirm"
@@ -362,6 +412,17 @@ def handle(state: DialogueState, text: str) -> Optional[Result]:
             )
     
     if state.awaiting == "confirm":
+        # Check for explicit place pattern that overrides current booking
+        if places_result.get("pickup") or places_result.get("drop"):
+            # Explicit pattern found - overwrite slots
+            if places_result.get("pickup"):
+                state.pickup = places_result["pickup"]
+            if places_result.get("drop"):
+                state.drop = places_result["drop"]
+            # After overwrite, stay in confirm-awaiting
+            state.awaiting = "confirm"
+            return Result(reply=_build_confirm_message(state), intent="booking")
+        
         if _is_affirmative(text):
             booked_dict = {
                 "pickup": state.pickup,
