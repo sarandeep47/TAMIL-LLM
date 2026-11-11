@@ -65,3 +65,11 @@ node_modules/
 step3/old/
 step3/ollama_ps_*.txt
 step3/summary.md
+  STEP*.txt
+  *_output*.txt
+  test_result*.txt
+  test_on_2_fixed.txt
+  baseline_run.txt
+  tamil_fallback_strings.txt
+  server_backup.py
+  server_original.py
