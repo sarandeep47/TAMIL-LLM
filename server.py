@@ -18,6 +18,7 @@ from faster_whisper import WhisperModel
 from pydantic import BaseModel
 import logging
 from router import route_message
+from dialogue import SessionStore, handle
 from step4.streaming_utils import strip_role_prefix, SentenceSplitter
 from token_cleaner import TokenCleaner
 from stt.transcript_guard import check_transcript
@@ -76,9 +77,13 @@ logger.info(f"Config: NUM_CTX={NUM_CTX}, NUM_PREDICT={NUM_PREDICT}, TEMPERATURE=
 model_warm = False
 model_warm_time = 0
 
+# ============ DIALOGUE SESSION STORE ============
+dialogue_store = SessionStore(ttl_seconds=1800)
+
 # ============ REQUEST MODELS ============
 class ChatRequest(BaseModel):
     text: str
+    session_id: str = "default"
 
 # ============ WHISPER INITIALIZATION ============
 logger.info("Initializing Faster-Whisper (optimized CPU settings)...")
@@ -525,15 +530,29 @@ async def chat(request: ChatRequest):
     
     start_time = time.time()
     
-    # Try router first
-    rule_reply, rule_latency, route = await run_in_threadpool(respond, user_text)
+    # Try dialogue first
+    state = dialogue_store.get(request.session_id)
+    dialogue_result = await run_in_threadpool(handle, state, user_text)
     
-    if rule_reply is None:
-        # Use LLM
-        bot_text, llm_latency = await run_in_threadpool(ask_ollama, user_text)
+    if dialogue_result is not None:
+        # Dialogue handled it
+        bot_text = dialogue_result.reply
+        route = "dialogue"
+        llm_latency = 0
+        
+        # Log booking if completed
+        if dialogue_result.booked:
+            logger.info(f"Booking completed: pickup={dialogue_result.booked.get('pickup')}, drop={dialogue_result.booked.get('drop')}, when={dialogue_result.booked.get('when')}")
     else:
-        bot_text = rule_reply
-        llm_latency = rule_latency
+        # Try router
+        rule_reply, rule_latency, route = await run_in_threadpool(respond, user_text)
+        
+        if rule_reply is None:
+            # Use LLM
+            bot_text, llm_latency = await run_in_threadpool(ask_ollama, user_text)
+        else:
+            bot_text = rule_reply
+            llm_latency = rule_latency
     
     total_ms = int((time.time() - start_time) * 1000)
     
@@ -666,52 +685,70 @@ async def chat_stream(request: ChatRequest):
             first_token_time = None
             first_sentence_time = None
             
-            # Try router first
-            reply, route_latency, route = respond(user_text)
+            # Try dialogue first
+            state = dialogue_store.get(request.session_id)
+            dialogue_result = handle(state, user_text)
             
-            if reply is not None:
-                # Router handled it
+            if dialogue_result is not None:
+                # Dialogue handled it
+                reply = dialogue_result.reply
+                route = "dialogue"
+                
+                # Log booking if completed
+                if dialogue_result.booked:
+                    logger.info(f"Booking completed: pickup={dialogue_result.booked.get('pickup')}, drop={dialogue_result.booked.get('drop')}, when={dialogue_result.booked.get('when')}")
+                
+                # Emit same events as router
                 yield f'data: {json.dumps({"event": "meta", "route": route, "model": PERSONAI_MODEL})}\n\n'
                 yield f'data: {json.dumps({"event": "sentence", "index": 0, "text": reply})}\n\n'
                 yield f'data: {json.dumps({"event": "done", "reply": reply, "ttft_ms": 0, "first_sentence_ms": 0, "total_ms": int((time.time() - request_start_time) * 1000), "route": route})}\n\n'
             else:
-                # Use LLM
-                yield f'data: {json.dumps({"event": "meta", "route": "llm", "model": PERSONAI_MODEL})}\n\n'
+                # Try router
+                reply, route_latency, route = respond(user_text)
                 
-                splitter = SentenceSplitter()
-                cleaner = TokenCleaner()
-                sentence_count = 0
-                full_reply = ""
-                
-                stream_obj = ask_ollama_stream(user_text)
-                try:
-                    for chunk in stream_obj:
-                        if first_token_time is None:
-                            first_token_time = time.time()
-                        
-                        full_reply += chunk
-                        
-                        # Emit cleaned token event
-                        cleaned = cleaner.feed(chunk)
-                        if cleaned:
-                            yield f'data: {json.dumps({"event": "token", "text": cleaned})}\n\n'
-                        
-                        # Check for sentences
-                        sentences = splitter.feed(chunk)
-                        for sentence in sentences:
-                            if first_sentence_time is None:
-                                first_sentence_time = time.time()
-                            if sentence_count < MAX_SENTENCES:
-                                yield f'data: {json.dumps({"event": "sentence", "index": sentence_count, "text": sentence})}\n\n'
-                                sentence_count += 1
-                            else:
+                if reply is not None:
+                    # Router handled it
+                    yield f'data: {json.dumps({"event": "meta", "route": route, "model": PERSONAI_MODEL})}\n\n'
+                    yield f'data: {json.dumps({"event": "sentence", "index": 0, "text": reply})}\n\n'
+                    yield f'data: {json.dumps({"event": "done", "reply": reply, "ttft_ms": 0, "first_sentence_ms": 0, "total_ms": int((time.time() - request_start_time) * 1000), "route": route})}\n\n'
+                else:
+                    # Use LLM
+                    yield f'data: {json.dumps({"event": "meta", "route": "llm", "model": PERSONAI_MODEL})}\n\n'
+                    
+                    splitter = SentenceSplitter()
+                    cleaner = TokenCleaner()
+                    sentence_count = 0
+                    full_reply = ""
+                    
+                    stream_obj = ask_ollama_stream(user_text)
+                    try:
+                        for chunk in stream_obj:
+                            if first_token_time is None:
+                                first_token_time = time.time()
+                            
+                            full_reply += chunk
+                            
+                            # Emit cleaned token event
+                            cleaned = cleaner.feed(chunk)
+                            if cleaned:
+                                yield f'data: {json.dumps({"event": "token", "text": cleaned})}\n\n'
+                            
+                            # Check for sentences
+                            sentences = splitter.feed(chunk)
+                            for sentence in sentences:
+                                if first_sentence_time is None:
+                                    first_sentence_time = time.time()
+                                if sentence_count < MAX_SENTENCES:
+                                    yield f'data: {json.dumps({"event": "sentence", "index": sentence_count, "text": sentence})}\n\n'
+                                    sentence_count += 1
+                                else:
+                                    break
+                            
+                            if sentence_count >= MAX_SENTENCES:
                                 break
-                        
-                        if sentence_count >= MAX_SENTENCES:
-                            break
-                finally:
-                    stream_obj.close()
-                    logger.info(f"stream closed: chat_stream loop stopped (sentences={sentence_count})")
+                    finally:
+                        stream_obj.close()
+                        logger.info(f"stream closed: chat_stream loop stopped (sentences={sentence_count})")
                 
                 # Flush remaining
                 tail = cleaner.flush()
