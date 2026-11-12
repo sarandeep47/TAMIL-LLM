@@ -410,7 +410,221 @@ def test_group_j():
     return passed, failed
 
 
+def test_group_k():
+    """K. Confirm state: each yes word books and resets."""
+    passed = 0
+    failed = 0
+    
+    yes_words = [
+        "aama", "ama", "aamam", "yes", "ok", "okay", "sari", "seri", "sariya",
+        "correct", "confirm", "pannu", "pannidhu", "potturu", "pannunga",
+        "panunga", "podu", "podunga", "book pannu", "book pannunga"
+    ]
+    
+    for yes_word in yes_words:
+        state = DialogueState()
+        # Start booking
+        result = handle(state, "enaku oru cab book pannanum")
+        if not result or state.awaiting != "pickup":
+            print(f"FAIL K: Could not start booking for word '{yes_word}'")
+            failed += 1
+            continue
+        
+        # Add pickup and drop with from/to pattern
+        result = handle(state, "from madurai to chennai")
+        if not result or state.pickup is None or state.drop is None:
+            print(f"FAIL K: Could not set locations for '{yes_word}', pickup={state.pickup}, drop={state.drop}")
+            failed += 1
+            continue
+        
+        # Get to confirm
+        while state.awaiting != "confirm" and state.awaiting is not None:
+            if state.awaiting == "time":
+                result = handle(state, "naliki 2 mani")
+                if not result:
+                    break
+            elif state.awaiting == "ampm":
+                result = handle(state, "kalai")
+                if not result:
+                    break
+            else:
+                break
+        
+        if state.awaiting != "confirm":
+            print(f"FAIL K: Could not reach confirm state for word '{yes_word}', stuck at {state.awaiting}")
+            failed += 1
+            continue
+        
+        # Send yes word
+        result = handle(state, yes_word)
+        if result and result.booked and state.awaiting is None:
+            print(f"PASS K: '{yes_word}' -> booked, state reset")
+            passed += 1
+        else:
+            print(f"FAIL K: '{yes_word}' at confirm")
+            print(f"  Expected: booked, state reset")
+            print(f"  Actual: result={result}, state.awaiting={state.awaiting}")
+            failed += 1
+    
+    return passed, failed
+
+
+def test_group_l():
+    """L. Confirm state: each no word gives change reply."""
+    passed = 0
+    failed = 0
+    
+    no_words = ["illa", "ila", "no", "venam", "vendam", "venda", "maathu", "change"]
+    
+    for no_word in no_words:
+        state = DialogueState()
+        # Start booking
+        result = handle(state, "cab venum")
+        if not result:
+            failed += 1
+            continue
+        
+        # Add places and time with from/to pattern
+        result = handle(state, "from madurai to chennai")
+        if not result or state.pickup is None or state.drop is None:
+            print(f"FAIL L: Could not set locations for '{no_word}'")
+            failed += 1
+            continue
+        
+        # Get to confirm
+        while state.awaiting != "confirm" and state.awaiting is not None:
+            if state.awaiting == "time":
+                result = handle(state, "naliki 2 mani")
+                if not result:
+                    break
+            elif state.awaiting == "ampm":
+                result = handle(state, "kalai")
+                if not result:
+                    break
+            else:
+                break
+        
+        if state.awaiting != "confirm":
+            print(f"FAIL L: Could not reach confirm for '{no_word}'")
+            failed += 1
+            continue
+        
+        # Send no word
+        result = handle(state, no_word)
+        if result and result.reply == NO_AT_CONFIRM:
+            print(f"PASS L: '{no_word}' -> NO_AT_CONFIRM reply")
+            passed += 1
+        else:
+            print(f"FAIL L: '{no_word}' at confirm")
+            print(f"  Expected: {repr(NO_AT_CONFIRM)}")
+            print(f"  Actual: {repr(result.reply if result else None)}")
+            failed += 1
+    
+    return passed, failed
+
+
+def test_group_m():
+    """M. Fresh state: forbidden words return None."""
+    passed = 0
+    failed = 0
+    
+    forbidden_words = ["pannu", "seri", "ok", "podu", "confirm"]
+    
+    for word in forbidden_words:
+        state = DialogueState()
+        result = handle(state, word)
+        if result is None:
+            print(f"PASS M: '{word}' with fresh state -> None")
+            passed += 1
+        else:
+            print(f"FAIL M: '{word}' with fresh state")
+            print(f"  Expected: None")
+            print(f"  Actual: {repr(result)}")
+            failed += 1
+    
+    return passed, failed
+
+
+def test_group_n():
+    """N. Confirm state: explicit pattern with yes word is correction."""
+    passed = 0
+    failed = 0
+    
+    state = DialogueState()
+    # Start and reach confirm
+    result = handle(state, "cab venum")
+    result = handle(state, "from madurai to chennai")
+    
+    while state.awaiting != "confirm":
+        if state.awaiting == "time":
+            result = handle(state, "naliki 2 mani")
+        elif state.awaiting == "ampm":
+            result = handle(state, "kalai")
+        else:
+            break
+    
+    if state.awaiting != "confirm":
+        print(f"FAIL N: Could not reach confirm state")
+        return 0, 1
+    
+    # Send correction with yes-like word: "illa madurai to salem"
+    # This should change locations and stay in confirm, not book
+    original_pickup = state.pickup
+    result = handle(state, "illa from salem to trichy")
+    
+    if result and state.awaiting == "confirm" and not result.booked:
+        print(f"PASS N: 'illa from salem to trichy' at confirm -> correction, stays in confirm")
+        passed += 1
+    else:
+        print(f"FAIL N: 'illa from salem to trichy' at confirm")
+        print(f"  Expected: correction, stays in confirm, no booking")
+        print(f"  Actual: state.awaiting={state.awaiting}, booked={result.booked if result else None}")
+        failed += 1
+    
+    return passed, failed
+
+
+def test_group_o():
+    """O. Confirm state: question returns None, state unchanged."""
+    passed = 0
+    failed = 0
+    
+    state = DialogueState()
+    # Start and reach confirm
+    result = handle(state, "cab venum")
+    result = handle(state, "from madurai to chennai")
+    
+    while state.awaiting != "confirm":
+        if state.awaiting == "time":
+            result = handle(state, "naliki 2 mani")
+        elif state.awaiting == "ampm":
+            result = handle(state, "kalai")
+        else:
+            break
+    
+    if state.awaiting != "confirm":
+        print(f"FAIL O: Could not reach confirm state")
+        return 0, 1
+    
+    original_state = (state.pickup, state.drop, state.hour, state.awaiting)
+    
+    # Send question: "enna time"
+    result = handle(state, "enna time")
+    
+    if result is None and state.awaiting == "confirm" and (state.pickup, state.drop, state.hour, state.awaiting) == original_state:
+        print(f"PASS O: 'enna time' at confirm -> None, state unchanged")
+        passed += 1
+    else:
+        print(f"FAIL O: 'enna time' at confirm")
+        print(f"  Expected: None, state unchanged")
+        print(f"  Actual: result={result}, state.awaiting={state.awaiting}")
+        failed += 1
+    
+    return passed, failed
+
+
 def main():
+
     print("=" * 80)
     print("Testing dialogue state machine")
     print("=" * 80)
@@ -429,6 +643,11 @@ def main():
         ("H", test_group_h),
         ("I", test_group_i),
         ("J", test_group_j),
+        ("K", test_group_k),
+        ("L", test_group_l),
+        ("M", test_group_m),
+        ("N", test_group_n),
+        ("O", test_group_o),
     ]
     
     for group_name, test_func in groups:

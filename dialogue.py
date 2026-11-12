@@ -117,21 +117,40 @@ def _is_cancellation(text: str) -> bool:
     return any(kw in text_lower for kw in ["cancel", "ratthu", "\u0BB0\u0BA4\u0BCD\u0BA4\u0BC1"])
 
 
+def _normalize_for_match(text: str) -> list:
+    """Normalize text and return list of whole tokens for matching."""
+    from dialogue_parse import normalize
+    normalized = normalize(text)
+    return normalized.split()
+
+
 def _is_affirmative(text: str) -> bool:
-    """Check if text is an affirmative response."""
-    text_lower = text.lower()
+    """Check if text is an affirmative response (at confirm state)."""
+    tokens = _normalize_for_match(text)
     affirmative_words = [
-        "aama", "ama", "yes", "ok", "sari",
+        "aama", "ama", "amam", "yes", "ok", "okay", "sari", "seri", "sariya",
+        "corect", "confirm", "panu", "panidhu", "poturu", "pannunga", 
+        "panunga", "podu", "podunga", "book",
         "\u0B9A\u0BB0\u0BBF", "\u0B86\u0BAE\u0BBE"
     ]
-    return any(kw in text_lower for kw in affirmative_words)
+    for token in tokens:
+        if token in affirmative_words:
+            return True
+    # Check for "book pannunga" or "book pannu" patterns
+    text_lower = text.lower()
+    if "book" in text_lower and any(p in text_lower for p in ["pannu", "pannunga", "panu"]):
+        return True
+    return False
 
 
 def _is_negative(text: str) -> bool:
     """Check if text is a negative response."""
-    text_lower = text.lower()
-    negative_words = ["no", "illa", "ila"]
-    return any(kw in text_lower for kw in negative_words)
+    tokens = _normalize_for_match(text)
+    negative_words = ["no", "ila", "venam", "vendam", "venda", "mathu", "change"]
+    for token in tokens:
+        if token in negative_words:
+            return True
+    return False
 
 
 def _is_greeting_or_thanks(text: str) -> bool:
@@ -141,10 +160,31 @@ def _is_greeting_or_thanks(text: str) -> bool:
     return any(kw in text_lower for kw in greeting_words)
 
 
+def _starts_booking_forbidden(text: str) -> bool:
+    """Check if text contains only forbidden words that cannot start a booking."""
+    tokens = _normalize_for_match(text)
+    forbidden_starters = ["pannu", "seri", "ok", "confirm", "podu"]
+    
+    # If ALL tokens are in forbidden list (or are fillers), it cannot start a booking
+    for token in tokens:
+        if token not in forbidden_starters and token not in ["naa", "nan", "enaku", "nee", "oru"]:
+            # Has a non-forbidden token, so it can proceed
+            return False
+    # All tokens are forbidden or fillers
+    return True
+
+
 def _is_consent_response(text: str) -> bool:
-    """Check if text is consent (sari/aama) outside booking."""
-    text_lower = text.lower()
-    return any(kw in text_lower for kw in ["sari", "aama", "ama"])
+    """Check if text is consent (sari/aama) outside booking and confirm."""
+    tokens = _normalize_for_match(text)
+    return any(t in ["sari", "aama", "ama"] for t in tokens)
+
+
+def _has_correction_pattern(places_result: Dict, time_result: Dict) -> bool:
+    """Check if text has explicit pickup/drop or time pattern (for confirm state)."""
+    has_place = places_result.get("pickup") or places_result.get("drop")
+    has_time = time_result.get("now") or time_result.get("hour") or time_result.get("date")
+    return has_place or has_time
 
 
 def _has_slot_info(places_result: Dict, time_result: Dict) -> bool:
@@ -197,6 +237,10 @@ def handle(state: DialogueState, text: str) -> Optional[Result]:
             return None
         
         if _is_consent_response(text) and not state.awaiting:
+            return None
+        
+        # Check if text is only forbidden words (cannot start a booking)
+        if _starts_booking_forbidden(text):
             return None
         
         has_explicit = places_result["pickup"] or places_result["drop"]
@@ -423,6 +467,28 @@ def handle(state: DialogueState, text: str) -> Optional[Result]:
             state.awaiting = "confirm"
             return Result(reply=_build_confirm_message(state), intent="booking")
         
+        # Check for time correction pattern (even if yes word is present, it's a correction not a booking)
+        if _has_correction_pattern(places_result, time_result):
+            # This is a correction, not a yes
+            if places_result.get("pickup"):
+                state.pickup = places_result["pickup"]
+            if places_result.get("drop"):
+                state.drop = places_result["drop"]
+            if time_result.get("now"):
+                state.now = True
+                state.hour = None
+                state.minute = None
+                state.ampm = None
+            elif time_result.get("hour") is not None:
+                state.hour = time_result["hour"]
+                state.minute = time_result.get("minute", 0)
+                state.ampm = time_result.get("ampm")
+                state.date = time_result.get("date") or state.date
+            elif time_result.get("date"):
+                state.date = time_result["date"]
+            state.awaiting = "confirm"
+            return Result(reply=_build_confirm_message(state), intent="booking")
+        
         if _is_affirmative(text):
             booked_dict = {
                 "pickup": state.pickup,
@@ -445,11 +511,23 @@ def handle(state: DialogueState, text: str) -> Optional[Result]:
             state.awaiting = None
             state.last_slot = None
             return Result(reply=BOOKED_REPLY, intent="booking", booked=booked_dict)
-        elif _is_negative(text) or _is_consent_response(text):
+        elif _is_negative(text):
             state.awaiting = "confirm"
             return Result(reply=NO_AT_CONFIRM, intent="booking")
+        elif _is_cancellation(text):
+            state.pickup = None
+            state.drop = None
+            state.date = None
+            state.now = False
+            state.hour = None
+            state.minute = None
+            state.ampm = None
+            state.awaiting = None
+            state.last_slot = None
+            return Result(reply=CANCEL_REPLY, intent="booking")
         else:
-            return Result(reply=_build_confirm_message(state), intent="booking")
+            # Neither yes, no, nor correction -> return None, keep state
+            return None
     
     return None
 
