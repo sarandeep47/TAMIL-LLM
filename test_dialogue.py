@@ -227,10 +227,18 @@ def test_group_e():
     handle(state3, "naliki 7 30 ku")
     handle(state3, "kalai")
     # Now in confirm state, override drop only
+    original_pickup = state3.pickup
+    original_hour = state3.hour
     result = handle(state3, "illa madurai ku poganum")
     if result and state3.drop == "\u0BAE\u0BA4\u0BC1\u0BB0\u0BC8":
-        print("PASS E4: Override in confirm state changes drop only")
-        passed += 1
+        if state3.pickup == original_pickup and state3.hour == original_hour:
+            print("PASS E4: Override in confirm state changes drop only, pickup and time unchanged")
+            passed += 1
+        else:
+            print(f"FAIL E4: ill madurai ku poganum -> pickup/time changed when they shouldn't")
+            print(f"  Pickup before: {ascii(original_pickup)}, after: {ascii(state3.pickup)}")
+            print(f"  Hour before: {original_hour}, after: {state3.hour}")
+            failed += 1
     else:
         print(f"FAIL E4: illa madurai ku poganum -> expected drop=Madurai")
         print(f"  Actual drop: {ascii(state3.drop)}")
@@ -623,8 +631,205 @@ def test_group_o():
     return passed, failed
 
 
-def main():
+def test_group_p():
+    """P. No doubled endings in replies (using established patterns)."""
+    from dialogue_parse import loc, dat
+    
+    passed = 0
+    failed = 0
+    double_ending_loc = "\u0BBF\u0BB2\u0BCD\u0BBF\u0BB2\u0BCD"  # Doubled locative
+    double_ending_dat = "\u0B95\u0BCD\u0B95\u0BC1\u0B95\u0BCD\u0B95\u0BC1"  # Doubled dative
+    
+    # Test with actual booking patterns to reach confirm
+    state = DialogueState()
+    
+    # Start booking
+    r1 = handle(state, "enaku oru cab book pannanum")
+    r2 = handle(state, "naa madurai irundhu chennai ponnum")
+    r3 = handle(state, "naliki 2 mani")
+    r4 = handle(state, "kalai")
+    
+    # Now in confirm - r4 should have the confirm message
+    if r4:
+        confirm_text = r4.reply
+        if double_ending_loc in confirm_text:
+            print(f"FAIL P: Doubled locative ending in confirm message")
+            print(f"  Reply: {ascii(confirm_text)}")
+            failed += 1
+        elif double_ending_dat in confirm_text:
+            print(f"FAIL P: Doubled dative ending in confirm message")
+            print(f"  Reply: {ascii(confirm_text)}")
+            failed += 1
+        else:
+            print(f"PASS P1: No doubled endings in confirm message")
+            passed += 1
+    else:
+        print(f"FAIL P: Could not reach confirm state")
+        failed += 1
+    
+    # Check ack message - r2 should have it
+    if r2:
+        ack_text = r2.reply
+        if double_ending_loc in ack_text:
+            print(f"FAIL P: Doubled locative ending in ack message")
+            failed += 1
+        elif double_ending_dat in ack_text:
+            print(f"FAIL P: Doubled dative ending in ack message")
+            failed += 1
+        else:
+            print(f"PASS P2: No doubled endings in ack message")
+            passed += 1
+    else:
+        print(f"FAIL P: Could not get ack message")
+        failed += 1
+    
+    return passed, failed
 
+
+def test_group_q():
+    r"""Q. Exact expected text tests with \u escapes."""
+    from dialogue_parse import loc, dat
+    
+    passed = 0
+    failed = 0
+    
+    # Test 4a: Multi-step conversation with exact expected replies
+    messages = [
+        "cab venum",
+        "madurai la irundhu chennai ku",
+        "naliki 8 mani",
+        "malai"
+    ]
+    
+    expected_replies = {
+        1: "\u0B9A\u0BB0\u0BBF, \u0BAE\u0BA4\u0BC1\u0BB0\u0BC8\u0BAF\u0BBF\u0BB2\u0BCD \u0B87\u0BB0\u0BC1\u0BA8\u0BCD\u0BA4\u0BC1 \u0B9A\u0BC6\u0BA9\u0BCD\u0BA9\u0BC8\u0B95\u0BCD\u0B95\u0BC1. ",
+        3: "\u0BAE\u0BA4\u0BC1\u0BB0\u0BC8\u0BAF\u0BBF\u0BB2\u0BCD \u0B87\u0BB0\u0BC1\u0BA8\u0BCD\u0BA4\u0BC1 \u0B9A\u0BC6\u0BA9\u0BCD\u0BA9\u0BC8\u0B95\u0BCD\u0B95\u0BC1 \u0BA8\u0BBE\u0BB3\u0BC8\u0B95\u0BCD\u0B95\u0BC1 \u0B87\u0BB0\u0BB5\u0BC1 8 \u0BAE\u0BA3\u0BBF\u0B95\u0BCD\u0B95\u0BC1 \u0BAA\u0BC1\u0B95\u0BCD \u0BAA\u0BA3\u0BCD\u0BA3\u0B9F\u0BCD\u0B9F\u0BC1\u0BAE\u0BBE?"
+    }
+    
+    state = DialogueState()
+    for i, msg in enumerate(messages):
+        result = handle(state, msg)
+        if result is None:
+            print(f"FAIL Q4a: step {i}: '{msg}' returned None")
+            failed += 1
+            continue
+        
+        if i == 1:
+            # Check reply starts with ack
+            if not result.reply.startswith(expected_replies[1]):
+                print(f"FAIL Q4a step {i}: Expected start:")
+                print(f"  {repr(expected_replies[1])}")
+                print(f"  Actual start:")
+                print(f"  {repr(result.reply[:len(expected_replies[1])])}")
+                print(f"  Full reply: {ascii(result.reply)}")
+                failed += 1
+            else:
+                print(f"PASS Q4a step {i}: Correct ack + time question")
+                passed += 1
+        elif i == 3:
+            # Check exact confirm message
+            if result.reply == expected_replies[3]:
+                print(f"PASS Q4a step {i}: Exact confirm message")
+                passed += 1
+            else:
+                print(f"FAIL Q4a step {i}: Confirm message mismatch")
+                print(f"  Expected: {repr(expected_replies[3])}")
+                print(f"  Actual: {repr(result.reply)}")
+                print(f"  Expected ascii: {ascii(expected_replies[3])}")
+                print(f"  Actual ascii: {ascii(result.reply)}")
+                failed += 1
+    
+    # Test 4b: Single message with both pickup and drop
+    state2 = DialogueState()
+    result = handle(state2, "madurai la irundhu chennai ku cab venum")
+    
+    expected_ack_start = "\u0B9A\u0BB0\u0BBF, \u0BAE\u0BA4\u0BC1\u0BB0\u0BC8\u0BAF\u0BBF\u0BB2\u0BCD \u0B87\u0BB0\u0BC1\u0BA8\u0BCD\u0BA4\u0BC1 \u0B9A\u0BC6\u0BA9\u0BCD\u0BA9\u0BC8\u0B95\u0BCD\u0B95\u0BC1. "
+    
+    if result and result.reply.startswith(expected_ack_start):
+        print(f"PASS Q4b: Single message with both pickup/drop has ack")
+        passed += 1
+    else:
+        print(f"FAIL Q4b: Single message should start with ack")
+        print(f"  Expected start: {repr(expected_ack_start)}")
+        print(f"  Actual: {repr(result.reply[:len(expected_ack_start)] if result else 'None')}")
+        failed += 1
+    
+    # Test 4c: All 15 place names as pickup
+    with open("PLACE_NAMES.txt", "r", encoding="utf-8") as f:
+        place_lines = f.read().strip().split('\n')
+    
+    place_names = [line.strip() for line in place_lines if line.strip()][:15]
+    double_ending_loc = "\u0BBF\u0BB2\u0BCD\u0BBF\u0BB2\u0BCD"
+    
+    for place_name in place_names:
+        # Build the expected messages using loc() and dat()
+        ack_template = "\u0B9A\u0BB0\u0BBF, {pickup} \u0B87\u0BB0\u0BC1\u0BA8\u0BCD\u0BA4\u0BC1 \u0B9A\u0BC6\u0BA9\u0BCD\u0BA9\u0BC8\u0B95\u0BCD\u0B95\u0BC1. "
+        ack_msg = ack_template.format(pickup=loc(place_name))
+        
+        confirm_template = "{pickup} \u0B87\u0BB0\u0BC1\u0BA8\u0BCD\u0BA4\u0BC1 \u0B9A\u0BC6\u0BA9\u0BCD\u0BA9\u0BC8\u0B95\u0BCD\u0B95\u0BC1 \u0B87\u0BA9\u0BCD\u0BA9\u0BC8\u0B95\u0BCD\u0B95\u0BC1 \u0B87\u0BB0\u0BB5\u0BC1 2 \u0BAE\u0BA3\u0BBF\u0B95\u0BCD\u0B95\u0BC1 \u0BAA\u0BC1\u0B95\u0BCD \u0BAA\u0BA3\u0BCD\u0BA3\u0B9F\u0BCD\u0B9F\u0BC1\u0BAE\u0BBE?"
+        confirm_msg = confirm_template.format(pickup=loc(place_name))
+        
+        # Check for doubled ending
+        if double_ending_loc in ack_msg or double_ending_loc in confirm_msg:
+            print(f"FAIL Q4c: {place_name[:20]} has doubled ending")
+            print(f"  Ack: {ascii(ack_msg)}")
+            print(f"  Confirm: {ascii(confirm_msg)}")
+            failed += 1
+        else:
+            print(f"PASS Q4c: {place_name[:20]} has correct endings")
+            passed += 1
+    
+    # Test 4d: am/pm question format
+    state4 = DialogueState()
+    state4.awaiting = "ampm"
+    state4.hour = 8
+    state4.minute = 0
+    
+    result = handle(state4, "blah")
+    
+    expected_ampm = "8 \u0BAE\u0BA3\u0BBF \u0B95\u0BBE\u0BB2\u0BC8\u0BAF\u0BBE, \u0BAE\u0BBE\u0BB2\u0BC8\u0BAF\u0BBE?"
+    
+    if result and expected_ampm in result.reply:
+        print(f"PASS Q4d: am/pm question has correct format with space")
+        passed += 1
+    else:
+        print(f"FAIL Q4d: am/pm question format wrong")
+        print(f"  Expected to contain: {repr(expected_ampm)}")
+        print(f"  Actual: {repr(result.reply if result else 'None')}")
+        failed += 1
+    
+    return passed, failed
+
+
+def test_group_r():
+    r"""R. Print exact acknowledgement and confirm sentences for 5 pickups."""
+    from dialogue_parse import loc, dat
+    
+    pickups = [
+        ("\u0BAE\u0BA4\u0BC1\u0BB0\u0BC8", "Madurai"),
+        ("\u0BA4\u0BBF\u0BB0\u0BC1\u0B9A\u0BCD\u0B9A\u0BBF", "Trichy"),
+        ("\u0B85\u0BA3\u0BCD\u0BA3\u0BBE \u0BA8\u0B95\u0BB0\u0BCD", "Anna Nagar"),
+        ("\u0BA4\u0BC6\u0BAA\u0BCD\u0BAA\u0B95\u0BCD\u0B95\u0BC1\u0BB3\u0BAE\u0BCD", "Teppakulam"),
+        ("\u0BB5\u0BBF\u0BAE\u0BA8 \u0BA8\u0BBF\u0BB2\u0BC8\u0BAF\u0BAE\u0BCD", "Airport"),
+    ]
+    
+    for place_tamil, label in pickups:
+        # Ack message
+        ack_template = "\u0B9A\u0BB0\u0BBF, {pickup} \u0B87\u0BB0\u0BC1\u0BA8\u0BCD\u0BA4\u0BC1 \u0B9A\u0BC6\u0BA9\u0BCD\u0BA9\u0BC8\u0B95\u0BCD\u0B95\u0BC1. "
+        ack_msg = ack_template.format(pickup=loc(place_tamil))
+        
+        # Confirm message (fixed time for consistency)
+        confirm_template = "{pickup} \u0B87\u0BB0\u0BC1\u0BA8\u0BCD\u0BA4\u0BC1 \u0B9A\u0BC6\u0BA9\u0BCD\u0BA9\u0BC8\u0B95\u0BCD\u0B95\u0BC1 \u0B87\u0BA9\u0BCD\u0BA9\u0BC8\u0B95\u0BCD\u0B95\u0BC1 \u0B87\u0BB0\u0BB5\u0BC1 2 \u0BAE\u0BA3\u0BBF\u0B95\u0BCD\u0B95\u0BC1 \u0BAA\u0BC1\u0B95\u0BCD \u0BAA\u0BA3\u0BCD\u0BA3\u0B9F\u0BCD\u0B9F\u0BC1\u0BAE\u0BBE?"
+        confirm_msg = confirm_template.format(pickup=loc(place_tamil))
+        
+        print(f"{label}:")
+        print(f"  Ack: {ascii(ack_msg)}")
+        print(f"  Confirm: {ascii(confirm_msg)}")
+    
+    return 0, 0  # No failures, just printing
+
+
+def main():
     print("=" * 80)
     print("Testing dialogue state machine")
     print("=" * 80)
@@ -648,6 +853,9 @@ def main():
         ("M", test_group_m),
         ("N", test_group_n),
         ("O", test_group_o),
+        ("P", test_group_p),
+        ("Q", test_group_q),
+        ("R", test_group_r),
     ]
     
     for group_name, test_func in groups:

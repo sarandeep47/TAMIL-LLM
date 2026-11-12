@@ -297,10 +297,13 @@ def handle(state: DialogueState, text: str) -> Optional[Result]:
                 if time_result.get("date"):
                     state.date = time_result["date"]
                     if state.date == "tomorrow":
-                        return Result(reply=ASK_TIME_TOMORROW, intent="booking")
+                        ack = ACK_BOTH_TEMPLATE.format(pickup=_loc(state.pickup), drop=_dat(state.drop))
+                        return Result(reply=ack + ASK_TIME_TOMORROW, intent="booking")
                     else:
-                        return Result(reply=ASK_TIME_TODAY, intent="booking")
-                return Result(reply=ASK_TIME_INITIAL, intent="booking")
+                        ack = ACK_BOTH_TEMPLATE.format(pickup=_loc(state.pickup), drop=_dat(state.drop))
+                        return Result(reply=ack + ASK_TIME_TODAY, intent="booking")
+                ack = ACK_BOTH_TEMPLATE.format(pickup=_loc(state.pickup), drop=_dat(state.drop))
+                return Result(reply=ack + ASK_TIME_INITIAL, intent="booking")
         elif state.pickup and not state.drop:
             return Result(reply=ASK_DROP, intent="booking")
         elif state.drop and not state.pickup:
