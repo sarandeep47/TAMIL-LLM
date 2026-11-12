@@ -749,45 +749,46 @@ async def chat_stream(request: ChatRequest):
                     finally:
                         stream_obj.close()
                         logger.info(f"stream closed: chat_stream loop stopped (sentences={sentence_count})")
-                
-                # Flush remaining
-                tail = cleaner.flush()
-                if tail:
-                    yield f'data: {json.dumps({"event": "token", "text": tail})}\n\n'
-                
-                remaining = splitter.flush()
-                if remaining and sentence_count < MAX_SENTENCES:
-                    if first_sentence_time is None:
-                        first_sentence_time = time.time()
-                    yield f'data: {json.dumps({"event": "sentence", "index": sentence_count, "text": remaining})}\n\n'
-                
-                ttft_ms = int((first_token_time - request_start_time) * 1000) if first_token_time else 0
-                first_sentence_ms = int((first_sentence_time - request_start_time) * 1000) if first_sentence_time else 0
-                total_ms = int((time.time() - request_start_time) * 1000)
-                
-                # Clean the full reply
-                full_reply = strip_role_prefix(full_reply)
-                
-                # Get Ollama metrics from stream object (per-request, not shared)
-                metrics = stream_obj.metrics
-                
-                done_event = {
-                    "event": "done",
-                    "reply": full_reply,
-                    "ttft_ms": ttft_ms,
-                    "first_sentence_ms": first_sentence_ms,
-                    "total_ms": total_ms,
-                    "route": "llm"
-                }
-                # Add metrics if available
-                if metrics.get("load_ms"):
-                    done_event["load_ms"] = metrics.get("load_ms", 0)
-                if metrics.get("prefill_ms"):
-                    done_event["prefill_ms"] = metrics.get("prefill_ms", 0)
-                if metrics.get("eval_count"):
-                    done_event["eval_count"] = metrics.get("eval_count", 0)
-                
-                yield f'data: {json.dumps(done_event)}\n\n'
+                    
+                    # Flush remaining
+                    if cleaner:
+                        tail = cleaner.flush()
+                        if tail:
+                            yield f'data: {json.dumps({"event": "token", "text": tail})}\n\n'
+                    
+                    remaining = splitter.flush()
+                    if remaining and sentence_count < MAX_SENTENCES:
+                        if first_sentence_time is None:
+                            first_sentence_time = time.time()
+                        yield f'data: {json.dumps({"event": "sentence", "index": sentence_count, "text": remaining})}\n\n'
+                    
+                    ttft_ms = int((first_token_time - request_start_time) * 1000) if first_token_time else 0
+                    first_sentence_ms = int((first_sentence_time - request_start_time) * 1000) if first_sentence_time else 0
+                    total_ms = int((time.time() - request_start_time) * 1000)
+                    
+                    # Clean the full reply
+                    full_reply = strip_role_prefix(full_reply)
+                    
+                    # Get Ollama metrics from stream object (per-request, not shared)
+                    metrics = stream_obj.metrics
+                    
+                    done_event = {
+                        "event": "done",
+                        "reply": full_reply,
+                        "ttft_ms": ttft_ms,
+                        "first_sentence_ms": first_sentence_ms,
+                        "total_ms": total_ms,
+                        "route": "llm"
+                    }
+                    # Add metrics if available
+                    if metrics.get("load_ms"):
+                        done_event["load_ms"] = metrics.get("load_ms", 0)
+                    if metrics.get("prefill_ms"):
+                        done_event["prefill_ms"] = metrics.get("prefill_ms", 0)
+                    if metrics.get("eval_count"):
+                        done_event["eval_count"] = metrics.get("eval_count", 0)
+                    
+                    yield f'data: {json.dumps(done_event)}\n\n'
         
         except Exception as e:
             logger.error(f"Streaming error: {e}")
@@ -908,9 +909,10 @@ async def voice_turn_stream(file: UploadFile = File(...)):
                     logger.info(f"stream closed: voice_turn_stream loop stopped (sentences={sentence_count})")
                 
                 # Flush remaining
-                tail = cleaner.flush()
-                if tail:
-                    yield f'data: {json.dumps({"event": "token", "text": tail})}\n\n'
+                if cleaner:
+                    tail = cleaner.flush()
+                    if tail:
+                        yield f'data: {json.dumps({"event": "token", "text": tail})}\n\n'
                 
                 remaining = splitter.flush()
                 if remaining and sentence_count < MAX_SENTENCES:

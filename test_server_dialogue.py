@@ -21,11 +21,16 @@ def mock_ask_ollama(prompt_text):
 def mock_ask_ollama_stream(prompt_text):
     """Mock LLM stream for testing."""
     class MockStream:
+        def __init__(self):
+            self.metrics = {}
+        
         def __iter__(self):
             yield "LLM"
             yield " response"
+        
         def close(self):
             pass
+    
     return MockStream()
 
 
@@ -347,6 +352,148 @@ def test_group_f():
     return passed, failed
 
 
+def test_group_g():
+    """g. /api/chat-stream with greetings and thanks (cleaner bug fix)."""
+    global llm_call_count
+    reset_store_and_counts()
+    
+    test_cases = [
+        ("vanakam", "greeting"),
+        ("nandri", "thanks"),
+        ("seri nandri", "mixed"),
+    ]
+    
+    passed = 0
+    failed = 0
+    
+    for text, label in test_cases:
+        # Test 1: Fresh session
+        reset_store_and_counts()
+        with patch('server.ask_ollama', side_effect=count_llm_calls(mock_ask_ollama)):
+            with patch('server.ask_ollama_stream', side_effect=count_llm_calls(mock_ask_ollama_stream)):
+                response = client.post("/api/chat-stream", json={"text": text, "session_id": f"g1_{label}"})
+        
+        if response.status_code != 200:
+            print(f"FAIL g: /api/chat-stream with '{text}' (fresh) returned {response.status_code}")
+            failed += 1
+            continue
+        
+        # Check for error events (event type 'error', not the string "Error")
+        lines = response.text.strip().split('\n\n')
+        has_error_event = False
+        has_done = False
+        for line in lines:
+            if line.startswith('data: '):
+                try:
+                    event = json.loads(line[6:])
+                    if event.get('event') == 'error':
+                        has_error_event = True
+                    if event.get('event') == 'done':
+                        has_done = True
+                except:
+                    pass
+        
+        if has_error_event:
+            print(f"FAIL g: /api/chat-stream with '{text}' (fresh) returned error event")
+            failed += 1
+            continue
+        
+        if has_done:
+            print(f"PASS g1: /api/chat-stream with '{text}' (fresh) -> done event")
+            passed += 1
+        else:
+            print(f"FAIL g1: /api/chat-stream with '{text}' (fresh) -> no done event")
+            failed += 1
+        
+        # Test 2: After completed booking in same session
+        reset_store_and_counts()
+        with patch('server.ask_ollama', side_effect=count_llm_calls(mock_ask_ollama)):
+            with patch('server.ask_ollama_stream', side_effect=count_llm_calls(mock_ask_ollama_stream)):
+                # Complete a booking first
+                r1 = client.post("/api/chat-stream", json={"text": "from madurai to salem", "session_id": f"g2_{label}"})
+                r2 = client.post("/api/chat-stream", json={"text": "naliki 2 mani", "session_id": f"g2_{label}"})
+                r3 = client.post("/api/chat-stream", json={"text": "kalai", "session_id": f"g2_{label}"})
+                r4 = client.post("/api/chat-stream", json={"text": "aama", "session_id": f"g2_{label}"})
+                
+                # Now send greeting
+                response = client.post("/api/chat-stream", json={"text": text, "session_id": f"g2_{label}"})
+        
+        if response.status_code != 200:
+            print(f"FAIL g: /api/chat-stream with '{text}' (after booking) returned {response.status_code}")
+            failed += 1
+            continue
+        
+        lines = response.text.strip().split('\n\n')
+        has_error_event = False
+        has_done = False
+        for line in lines:
+            if line.startswith('data: '):
+                try:
+                    event = json.loads(line[6:])
+                    if event.get('event') == 'error':
+                        has_error_event = True
+                    if event.get('event') == 'done':
+                        has_done = True
+                except:
+                    pass
+        
+        if has_error_event:
+            print(f"FAIL g: /api/chat-stream with '{text}' (after booking) returned error event")
+            failed += 1
+            continue
+        
+        if has_done:
+            print(f"PASS g2: /api/chat-stream with '{text}' (after booking) -> done event")
+            passed += 1
+        else:
+            print(f"FAIL g2: /api/chat-stream with '{text}' (after booking) -> no done event")
+            failed += 1
+    
+    return passed, failed
+
+
+def test_group_h():
+    """h. LLM route in /api/chat-stream finishes with done event."""
+    global llm_call_count
+    reset_store_and_counts()
+    
+    with patch('server.ask_ollama', side_effect=count_llm_calls(mock_ask_ollama)):
+        with patch('server.ask_ollama_stream', side_effect=count_llm_calls(mock_ask_ollama_stream)):
+            response = client.post("/api/chat-stream", json={"text": "madurai la enna famous", "session_id": "h1"})
+    
+    if response.status_code != 200:
+        print(f"FAIL h: /api/chat-stream returned {response.status_code}")
+        return 0, 1
+    
+    # Parse SSE and check for done event and no error events
+    lines = response.text.strip().split('\n\n')
+    events = []
+    for line in lines:
+        if line.startswith('data: '):
+            try:
+                event = json.loads(line[6:])
+                events.append(event)
+            except:
+                pass
+    
+    has_done = False
+    has_error = False
+    for event in events:
+        if event.get('event') == 'done':
+            has_done = True
+        if event.get('event') == 'error':
+            has_error = True
+    
+    if has_done and not has_error:
+        print(f"PASS h: LLM route in /api/chat-stream finishes with done event")
+        return 1, 0
+    else:
+        print(f"FAIL h: LLM route issues")
+        print(f"  has_done={has_done}, has_error={has_error}")
+        print(f"  Events: {events}")
+        return 0, 1
+
+
 def main():
     print("=" * 80)
     print("Testing dialogue.py integration with server.py")
@@ -382,6 +529,16 @@ def main():
     
     print("\nGroup f:")
     p, f = test_group_f()
+    total_passed += p
+    total_failed += f
+    
+    print("\nGroup g:")
+    p, f = test_group_g()
+    total_passed += p
+    total_failed += f
+    
+    print("\nGroup h:")
+    p, f = test_group_h()
     total_passed += p
     total_failed += f
     
